@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     debug: bool = False
     groq_api_key: SecretStr | None = Field(default=None, validation_alias=GROQ_API_KEY_ALIASES)
     model: str = "openai/gpt-oss-120b"
-    fallback_model: str | None = "openai/gpt-oss-20b"
+    fallback_model: str | None = None
     llm_base_url: str = "https://api.groq.com/openai/v1"
     llm_timeout_seconds: float = 60.0
     max_completion_tokens: int = 1024

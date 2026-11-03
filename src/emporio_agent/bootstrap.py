@@ -24,6 +24,7 @@ from emporio_agent.infrastructure.persistence.markdown_policy_repository import 
 @dataclass(frozen=True)
 class Container:
     repository: CsvRepository
+    clock: SystemClock
     catalog_service: CatalogService
     order_service: OrderService
     policy_service: PolicyService
@@ -81,6 +82,7 @@ def build_container(settings: Settings) -> Container:
     )
     return Container(
         repository=repository,
+        clock=clock,
         catalog_service=catalog_service,
         order_service=order_service,
         policy_service=policy_service,

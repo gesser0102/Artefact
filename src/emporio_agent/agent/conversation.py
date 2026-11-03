@@ -42,7 +42,7 @@ from emporio_agent.application.conversation.messages import (
 )
 from emporio_agent.application.policies.dtos import PolicyIndexEntry
 from emporio_agent.application.ports import ChatModel, Clock, TraceSink
-from emporio_agent.domain.exceptions import ChatModelError, TraceWriteError
+from emporio_agent.domain.exceptions import ChatModelError, ChatModelFailure, TraceWriteError
 from emporio_agent.domain.redaction import redact_text
 
 UNKNOWN_TOOL_OUTPUT = to_tool_json(serialize_error(UNKNOWN_TOOL_ERROR))
@@ -60,6 +60,7 @@ type Timer = Callable[[], float]
 class TurnResult:
     text: str
     trace: TurnTrace
+    failure: ChatModelFailure | None = None
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,7 @@ class Session:
             text = self._run_turn(turn_messages, steps)
         except ChatModelError as error:
             self._history.append(user_message)
-            return self._finish(reply_for_failure(error.reason), steps)
+            return self._finish(reply_for_failure(error.reason), steps, error.reason)
         self._history.extend(turn_messages)
         return self._finish(text, steps)
 
@@ -199,10 +200,15 @@ class Session:
             output, ToolOutcome.REJECTED if rejected else ToolOutcome.OK, arguments
         )
 
-    def _finish(self, text: str, steps: Sequence[TraceStep]) -> TurnResult:
+    def _finish(
+        self,
+        text: str,
+        steps: Sequence[TraceStep],
+        failure: ChatModelFailure | None = None,
+    ) -> TurnResult:
         trace = TurnTrace(tuple(steps))
         self._write_trace(trace)
-        return TurnResult(text=text, trace=trace)
+        return TurnResult(text=text, trace=trace, failure=failure)
 
     def _write_trace(self, trace: TurnTrace) -> None:
         if self._trace_sink is None:

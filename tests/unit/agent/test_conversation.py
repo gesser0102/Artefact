@@ -307,6 +307,7 @@ def test_chat_model_errors_become_fixed_messages(tools, reason, expected):
     result = session.reply("oi")
 
     assert result.text == expected
+    assert result.failure is reason
     assert session.history == (ChatMessage(Role.USER, "oi"),)
 
 

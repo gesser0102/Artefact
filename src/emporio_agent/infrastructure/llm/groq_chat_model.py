@@ -2,7 +2,7 @@ import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 
@@ -15,13 +15,13 @@ from emporio_agent.application.conversation.messages import (
     ToolSpec,
 )
 from emporio_agent.domain.exceptions import ChatModelError, ChatModelFailure
-from emporio_agent.infrastructure.observability.logging import log_error
+from emporio_agent.infrastructure.observability.logging import log_error, log_warning
 
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 USER_AGENT = "emporio-agent/0.1 (+httpx)"
 MAX_ATTEMPTS_PER_MODEL = 3
 BACKOFF_BASE_SECONDS = 1.0
-MAX_RETRY_WAIT_SECONDS = 20.0
+MAX_RETRY_WAIT_SECONDS = 30.0
 MAX_TOOL_USE_FAILED_RETRIES = 1
 TOOL_USE_FAILED_CODE = "tool_use_failed"
 RETRY_AFTER_HEADER = "retry-after"
@@ -133,6 +133,20 @@ def failure_of(response: httpx.Response, attempt: int) -> AttemptFailure:
     return AttemptFailure(ChatModelFailure.INVALID_RESPONSE, status, retry_wait=None)
 
 
+def can_fall_back(failure: AttemptFailure) -> bool:
+    return failure.tool_use_failed or failure.reason in FALLBACK_FAILURES
+
+
+def can_retry_same_model(failure: AttemptFailure, attempt: int, tool_use_retries: int) -> bool:
+    if failure.tool_use_failed:
+        return tool_use_retries < MAX_TOOL_USE_FAILED_RETRIES
+    return (
+        failure.retry_wait is not None
+        and not failure.switch_model
+        and attempt < MAX_ATTEMPTS_PER_MODEL
+    )
+
+
 def arguments_text(raw: object) -> str:
     if raw is None:
         return ""
@@ -206,18 +220,19 @@ class GroqChatModel:
         allow_tools: bool = True,
     ) -> ChatCompletion:
         attempts = 0
-        failure: AttemptFailure | None = None
-        for model in self._models:
+        for index, model in enumerate(self._models):
             payload = self._payload(model, messages, tools, allow_tools)
             result, model_attempts = self._complete_with(model, payload)
             attempts += model_attempts
             if isinstance(result, AttemptSuccess):
-                return self._parsed(result.body, model, attempts - 1)
-            failure = result
-            if failure.reason not in FALLBACK_FAILURES:
-                break
-        reason = ChatModelFailure.UNAVAILABLE if failure is None else failure.reason
-        raise ChatModelError(reason)
+                return self._parsed(result.body, model, attempts - 1, model_attempts)
+            if not (self._has_model_after(index) and can_fall_back(result)):
+                self._fail(result, model, model_attempts)
+            self._warn(result, model, model_attempts)
+        raise ChatModelError(ChatModelFailure.UNAVAILABLE)
+
+    def _has_model_after(self, index: int) -> bool:
+        return index + 1 < len(self._models)
 
     def _payload(
         self,
@@ -250,18 +265,13 @@ class GroqChatModel:
             result = self._attempt(model, payload, attempt)
             if isinstance(result, AttemptSuccess):
                 return result, attempt
-            if result.tool_use_failed:
-                if tool_use_retries >= MAX_TOOL_USE_FAILED_RETRIES:
-                    return result, attempt
-                tool_use_retries += 1
-                continue
-            if (
-                result.retry_wait is None
-                or result.switch_model
-                or attempt >= MAX_ATTEMPTS_PER_MODEL
-            ):
+            if not can_retry_same_model(result, attempt, tool_use_retries):
                 return result, attempt
-            self._sleep(result.retry_wait)
+            self._warn(result, model, attempt)
+            if result.tool_use_failed:
+                tool_use_retries += 1
+            elif result.retry_wait is not None:
+                self._sleep(result.retry_wait)
 
     def _attempt(
         self,
@@ -274,44 +284,53 @@ class GroqChatModel:
                 self._url, json=payload, headers=self._headers(), timeout=self._timeout
             )
         except httpx.TimeoutException:
-            return self._report(
-                AttemptFailure(ChatModelFailure.TIMEOUT, None, backoff_seconds(attempt)),
-                model,
-            )
+            return AttemptFailure(ChatModelFailure.TIMEOUT, None, backoff_seconds(attempt))
         except httpx.TransportError:
-            return self._report(
-                AttemptFailure(ChatModelFailure.UNAVAILABLE, None, backoff_seconds(attempt)),
-                model,
-            )
+            return AttemptFailure(ChatModelFailure.UNAVAILABLE, None, backoff_seconds(attempt))
         if response.is_success:
-            return self._decoded(response, model)
-        return self._report(failure_of(response, attempt), model)
+            return self._decoded(response)
+        return failure_of(response, attempt)
 
-    def _decoded(self, response: httpx.Response, model: str) -> AttemptSuccess | AttemptFailure:
+    def _decoded(self, response: httpx.Response) -> AttemptSuccess | AttemptFailure:
         try:
             return AttemptSuccess(response.json())
         except ValueError:
-            failure = AttemptFailure(
+            return AttemptFailure(
                 ChatModelFailure.INVALID_RESPONSE, response.status_code, retry_wait=None
             )
-            return self._report(failure, model)
 
-    def _parsed(self, body: Any, model: str, retries: int) -> ChatCompletion:
+    def _parsed(self, body: Any, model: str, retries: int, attempt: int) -> ChatCompletion:
         try:
             return parse_completion(body, model, retries)
         except PARSING_ERRORS as error:
             failure = AttemptFailure(ChatModelFailure.INVALID_RESPONSE, None, retry_wait=None)
-            self._report(failure, model)
-            raise ChatModelError(failure.reason) from error
+            self._fail(failure, model, attempt, cause=error)
 
-    def _report(self, failure: AttemptFailure, model: str) -> AttemptFailure:
-        log_error(
+    def _warn(self, failure: AttemptFailure, model: str, attempt: int) -> None:
+        log_warning(
             COMPLETE_SCOPE,
             ChatModelError(failure.reason),
             status_code=failure.status_code,
             model=model,
+            attempt=attempt,
         )
-        return failure
+
+    def _fail(
+        self,
+        failure: AttemptFailure,
+        model: str,
+        attempt: int,
+        cause: Exception | None = None,
+    ) -> NoReturn:
+        error = ChatModelError(failure.reason)
+        log_error(
+            COMPLETE_SCOPE,
+            error,
+            status_code=failure.status_code,
+            model=model,
+            attempt=attempt,
+        )
+        raise error from cause
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}", "User-Agent": USER_AGENT}

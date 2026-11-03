@@ -73,6 +73,7 @@ def test_build_container_wires_tools_to_real_data(data_dir):
     assert container.repository.list_order_items(1)
     assert json.loads(get_order_status(container.tools)) == {"verified": False}
     assert container.tools.policies is container.policy_service
+    assert container.clock.now().utcoffset() is not None
 
 
 def test_build_container_wires_policy_tools_to_the_real_manual(data_dir):
@@ -176,7 +177,7 @@ def test_settings_llm_defaults(monkeypatch):
 
     assert settings.groq_api_key is None
     assert settings.model == "openai/gpt-oss-120b"
-    assert settings.fallback_model == "openai/gpt-oss-20b"
+    assert settings.fallback_model is None
     assert settings.llm_base_url == "https://api.groq.com/openai/v1"
     assert settings.max_completion_tokens == 1024
     assert settings.reasoning_effort == "low"

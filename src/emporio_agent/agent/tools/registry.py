@@ -153,6 +153,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
                 "channel": {
                     "type": "string",
                     "enum": [channel.value for channel in PurchaseChannel],
+                    "description": (
+                        "online if bought on the website/app/WhatsApp; in_store if bought at the "
+                        "physical store. Fill it whenever the customer already said it."
+                    ),
                 },
                 "received_on": {
                     "type": "string",

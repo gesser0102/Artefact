@@ -302,11 +302,41 @@ def test_tool_use_failed_is_retried_once():
     assert recorder.models() == [PRIMARY, PRIMARY]
 
 
-def test_repeated_tool_use_failed_raises_invalid_response():
+def test_repeated_tool_use_failed_without_fallback_raises_invalid_response():
     recorder = Recorder(status(400, code="tool_use_failed"), status(400, code="tool_use_failed"))
 
-    assert failure_of(recorder) is ChatModelFailure.INVALID_RESPONSE
+    assert failure_of(recorder, fallback=None) is ChatModelFailure.INVALID_RESPONSE
     assert len(recorder.requests) == 2
+
+
+def test_repeated_tool_use_failed_switches_to_the_fallback():
+    recorder = Recorder(
+        status(400, code="tool_use_failed"),
+        status(400, code="tool_use_failed"),
+        ok("Do fallback"),
+    )
+
+    result = chat_model(recorder).complete(CONVERSATION, [SPEC])
+
+    assert result.message.content == "Do fallback"
+    assert result.model == FALLBACK
+    assert result.retries == 2
+    assert recorder.models() == [PRIMARY, PRIMARY, FALLBACK]
+    assert recorder.sleeps == []
+
+
+def test_tool_use_failed_on_both_models_raises_invalid_response():
+    recorder = Recorder(*[status(400, code="tool_use_failed") for _ in range(4)])
+
+    assert failure_of(recorder) is ChatModelFailure.INVALID_RESPONSE
+    assert recorder.models() == [PRIMARY, PRIMARY, FALLBACK, FALLBACK]
+
+
+def test_other_client_errors_do_not_use_the_fallback():
+    recorder = Recorder(status(422))
+
+    assert failure_of(recorder) is ChatModelFailure.INVALID_RESPONSE
+    assert recorder.models() == [PRIMARY]
 
 
 @pytest.mark.parametrize("response", [status(400), status(404), status(422)])
@@ -354,6 +384,63 @@ def test_secrets_and_message_contents_never_reach_logs_or_errors(caplog):
     assert "500" in caplog.text
     for secret in (API_KEY, CUSTOMER_PHONE, digits, "Você é a Lia", "violão"):
         assert secret not in exposed
+
+
+def emitted(caplog: pytest.LogCaptureFixture, level: int) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name == LOGGER_NAME and record.levelno == level
+    ]
+
+
+def test_retried_rate_limit_then_success_logs_only_warnings(caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
+    recorder = Recorder(status(429, {"retry-after": "1"}), ok())
+
+    chat_model(recorder).complete(CONVERSATION, [SPEC])
+
+    warnings = emitted(caplog, logging.WARNING)
+    assert len(warnings) == 1
+    assert "429" in warnings[0].getMessage()
+    assert PRIMARY in warnings[0].getMessage()
+    assert "'attempt': '1'" in warnings[0].getMessage()
+    assert emitted(caplog, logging.ERROR) == []
+
+
+def test_fallback_switch_is_logged_as_warning(caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
+    recorder = Recorder(status(429, {"retry-after": "999"}), ok())
+
+    chat_model(recorder).complete(CONVERSATION, [SPEC])
+
+    assert len(emitted(caplog, logging.WARNING)) == 1
+    assert emitted(caplog, logging.ERROR) == []
+
+
+def test_exhausted_retries_log_exactly_one_error_at_the_end(caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
+    recorder = Recorder(*[status(503) for _ in range(2 * MAX_ATTEMPTS_PER_MODEL)])
+
+    assert failure_of(recorder) is ChatModelFailure.UNAVAILABLE
+
+    records = [record for record in caplog.records if record.name == LOGGER_NAME]
+    errors = emitted(caplog, logging.ERROR)
+    assert len(errors) == 1
+    assert records[-1] is errors[0]
+    assert FALLBACK in errors[0].getMessage()
+    assert f"'attempt': '{MAX_ATTEMPTS_PER_MODEL}'" in errors[0].getMessage()
+    assert len(emitted(caplog, logging.WARNING)) == 2 * MAX_ATTEMPTS_PER_MODEL - 1
+
+
+def test_tool_use_failed_on_both_models_logs_one_error(caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
+    recorder = Recorder(*[status(400, code="tool_use_failed") for _ in range(4)])
+
+    failure_of(recorder)
+
+    assert len(emitted(caplog, logging.WARNING)) == 3
+    assert len(emitted(caplog, logging.ERROR)) == 1
 
 
 def test_client_repr_does_not_expose_the_key():

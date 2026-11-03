@@ -45,6 +45,8 @@ def test_load_indexes_every_table(repository):
     assert sum(len(repository.list_order_items(order_id)) for order_id in ORDER_IDS) == 22
     assert repository.get_customer(1) is not None
     assert repository.get_customer(9999) is None
+    assert len(repository.list_customers()) == 50
+    assert repository.list_customers()[0] == repository.get_customer(1)
     assert len(repository.list_order_items(15)) == 2
     assert repository.list_order_items(9999) == ()
 

@@ -168,5 +168,8 @@ class CsvRepository:
     def get_customer(self, customer_id: int) -> Customer | None:
         return self._customers_by_id.get(customer_id)
 
+    def list_customers(self) -> Sequence[Customer]:
+        return tuple(self._customers_by_id.values())
+
     def list_order_items(self, order_id: int) -> Sequence[OrderItem]:
         return self._order_items_by_order_id.get(order_id, ())

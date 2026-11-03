@@ -15,6 +15,7 @@ CONFIG = f"{PACKAGE}.config"
 BOOTSTRAP = f"{PACKAGE}.bootstrap"
 CLI = f"{PACKAGE}.cli"
 MAIN = f"{PACKAGE}.__main__"
+EVALUATION = f"{PACKAGE}.evaluation"
 SERIALIZATION = f"{AGENT}.tools.serialization"
 
 INTERNAL_IMPORTS_ALLOWED = {
@@ -26,6 +27,7 @@ INTERNAL_IMPORTS_ALLOWED = {
     BOOTSTRAP: (DOMAIN, APPLICATION, INFRASTRUCTURE, AGENT, CONFIG),
     CLI: (DOMAIN, APPLICATION, AGENT, CONFIG, BOOTSTRAP),
     MAIN: (CLI,),
+    EVALUATION: (DOMAIN, APPLICATION, AGENT, CONFIG, BOOTSTRAP, EVALUATION),
 }
 LAYERS_WITHOUT_THIRD_PARTY = (DOMAIN, APPLICATION)
 DOMAIN_FORBIDDEN_STDLIB = frozenset(
@@ -212,6 +214,10 @@ def test_every_module_belongs_to_a_layer():
         (f"{AGENT}.conversation", f"from {CLI} import main"),
         (f"{MAIN}", f"from {BOOTSTRAP} import build_container"),
         (f"{INFRASTRUCTURE}.llm.groq_chat_model", f"from {AGENT}.tracing import TurnTrace"),
+        (f"{EVALUATION}.runner", f"from {INFRASTRUCTURE}.clock import SystemClock"),
+        (f"{EVALUATION}.cli", f"from {CLI} import main"),
+        (f"{CLI}", f"from {EVALUATION}.runner import EvalRunner"),
+        (f"{AGENT}.conversation", f"from {EVALUATION} import checks"),
         (
             f"{AGENT}.tools.catalog_tools",
             f"import importlib\nimportlib.import_module('{INFRASTRUCTURE}.persistence')",
@@ -238,6 +244,9 @@ def test_checker_detects_forbidden_imports(module, source):
         (f"{CLI}", f"from {DOMAIN}.redaction import redact_text"),
         (f"{MAIN}", f"from {CLI} import main"),
         (f"{AGENT}.tracing", f"from {DOMAIN}.redaction import redact_text"),
+        (f"{EVALUATION}.cli", f"from {BOOTSTRAP} import build_container"),
+        (f"{EVALUATION}.runner", f"from {AGENT}.conversation import TurnResult"),
+        (f"{EVALUATION}.__main__", f"from {EVALUATION}.cli import main"),
     ],
 )
 def test_checker_accepts_allowed_imports(module, source):

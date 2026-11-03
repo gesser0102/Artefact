@@ -13,6 +13,10 @@ class TraceWriteError(Exception):
     pass
 
 
+class EvalCaseError(Exception):
+    pass
+
+
 class ChatModelFailure(StrEnum):
     RATE_LIMITED = "rate_limited"
     UNAVAILABLE = "unavailable"
