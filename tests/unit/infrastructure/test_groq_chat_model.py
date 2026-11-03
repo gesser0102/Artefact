@@ -91,9 +91,13 @@ class Recorder:
         return [json.loads(request.content)["model"] for request in self.requests]
 
 
-def chat_model(recorder: Recorder, fallback: str | None = FALLBACK) -> GroqChatModel:
+def chat_model(
+    recorder: Recorder,
+    fallback: str | None = FALLBACK,
+    base_url: str = BASE_URL,
+) -> GroqChatModel:
     return GroqChatModel(
-        base_url=BASE_URL,
+        base_url=base_url,
         api_key=API_KEY,
         model=PRIMARY,
         fallback_model=fallback,
@@ -228,6 +232,35 @@ def test_rate_limit_with_long_retry_after_switches_to_the_fallback():
     assert recorder.models() == [PRIMARY, FALLBACK]
     assert result.model == FALLBACK
     assert result.retries == 1
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "NaN"])
+def test_non_finite_retry_after_falls_back_to_backoff(raw):
+    recorder = Recorder(status(429, {"retry-after": raw}), ok())
+
+    result = chat_model(recorder).complete(CONVERSATION, [SPEC])
+
+    assert recorder.sleeps == [BACKOFF_BASE_SECONDS]
+    assert recorder.models() == [PRIMARY, PRIMARY]
+    assert result.retries == 1
+
+
+def test_invalid_base_url_is_reported_as_unavailable_without_a_request():
+    recorder = Recorder()
+
+    with pytest.raises(ChatModelError) as raised:
+        chat_model(recorder, fallback=None, base_url="http://[::1").complete(CONVERSATION, [SPEC])
+
+    assert raised.value.reason is ChatModelFailure.UNAVAILABLE
+    assert recorder.requests == []
+    assert recorder.sleeps == [BACKOFF_BASE_SECONDS, BACKOFF_BASE_SECONDS * 2]
+
+
+def test_other_http_errors_are_reported_as_unavailable():
+    recorder = Recorder(*[httpx.ProtocolError("bad frame") for _ in range(MAX_ATTEMPTS_PER_MODEL)])
+
+    assert failure_of(recorder, fallback=None) is ChatModelFailure.UNAVAILABLE
+    assert len(recorder.requests) == MAX_ATTEMPTS_PER_MODEL
 
 
 def test_long_rate_limit_without_fallback_raises_rate_limited():

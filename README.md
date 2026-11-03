@@ -39,6 +39,8 @@ python -m emporio_agent            # /nova começa outra conversa, /sair encerra
 python -m emporio_agent --trace    # também mostra ferramentas chamadas, tokens e tempo
 ```
 
+Os dados e o `.env` são procurados a partir da raiz do projeto, então os comandos funcionam de qualquer pasta.
+
 **Rodar um roteiro e salvar a conversa** (uma mensagem do cliente por linha; linhas com `#` são ignoradas):
 
 ```bash
@@ -117,7 +119,7 @@ src/emporio_agent/
 
 **Ferramentas em vez de colocar tudo no prompt.** Com 65 produtos, 20 pedidos e um manual de cerca de 1.800 palavras, daria para colocar tudo no prompt. Não fiz isso por três motivos. O modelo erra conta, e vi isso acontecer: antes da ferramenta de parcelas, ele disse que "R$ 120 em 3x dá R$ 40, acima do mínimo de R$ 50". O limite gratuito da Groq é de 8 mil tokens por minuto. E dados de clientes não devem ir para o modelo sem necessidade.
 
-**Function calling direto, sem framework de agente.** Pensei em LangChain e LlamaIndex. O agente é um laço simples, num arquivo de pouco mais de 200 linhas com registro e tratamento de erro: chamar o modelo, executar as ferramentas que ele pediu, devolver o resultado e repetir. As proteções que mais importam moram justamente nesse laço: o bloqueio depois de 3 falhas de identidade, o limite de rodadas e a poda do histórico sem separar a chamada da resposta. Com um framework, eu teria de contornar a abstração para chegar nelas, e o prompt e as tentativas ficariam escondidos. Escrevendo o laço eu mesmo, cada comportamento tem teste. O modelo fica atrás de uma interface (`ChatModel`), então trocar de provedor é escrever outro adaptador, sem mexer no agente.
+**Function calling direto, sem framework de agente.** Pensei em LangChain e LlamaIndex. O agente é um laço simples, num arquivo de cerca de 250 linhas com registro e tratamento de erro: chamar o modelo, executar as ferramentas que ele pediu, devolver o resultado e repetir. As proteções que mais importam moram justamente nesse laço: o bloqueio depois de 3 falhas de identidade, o limite de rodadas e a poda do histórico sem separar a chamada da resposta. Com um framework, eu teria de contornar a abstração para chegar nelas, e o prompt e as tentativas ficariam escondidos. Escrevendo o laço eu mesmo, cada comportamento tem teste. O modelo fica atrás de uma interface (`ChatModel`), então trocar de provedor é escrever outro adaptador, sem mexer no agente.
 
 **O prompt é curto e reage ao que as ferramentas devolvem.** Ele tem cerca de 840 tokens, e um teste quebra se passar de 900. Com 8 mil tokens por minuto, cada token fixo se repete em todas as chamadas da conversa. Ele contém:
 - a persona;
@@ -132,7 +134,7 @@ O princípio é que o código decide e o prompt só diz como falar. As regras s�
 
 **As decisões da loja vão junto com o trecho do manual.** O manual se contradiz em alguns pontos (veja [abaixo](#contradições-do-manual-e-o-que-decidi)). Escolhi uma resposta para cada contradição, e essa decisão chega ao modelo dentro do trecho, num campo `clarifications`, antes do texto. Quando a decisão vinha depois do texto, o modelo ignorava. Mudar a ordem resolveu.
 
-**Pedido só com número + telefone.** O e-mail não serve para identificar o cliente: na base, dois clientes diferentes têm o mesmo e-mail. Qualquer falha devolve exatamente `{"verified": false}`, sem dizer se o pedido existe ou qual dado está errado, e o telefone é comparado em tempo constante. Depois de 3 tentativas erradas, a conversa bloqueia novas consultas de pedido e indica a equipe. Esse bloqueio está no código, não depende do modelo obedecer.
+**Pedido só com número + telefone.** O e-mail não serve para identificar o cliente: na base, dois clientes diferentes têm o mesmo e-mail. Qualquer falha de verificação devolve exatamente `{"verified": false}`, sem dizer se o pedido existe ou qual dado está errado, e o telefone é comparado em tempo constante. Depois de 3 tentativas erradas, a conversa bloqueia novas consultas de pedido e indica a equipe. Esse bloqueio está no código, não depende do modelo obedecer. Um argumento malformado (telefone como número, campo faltando) é outra coisa: volta como `invalid_arguments` com o nome do campo, para o modelo se corrigir, e não conta como tentativa. Na primeira versão contava, e três deslizes de formatação do modelo bloqueavam um cliente que não tinha errado nada.
 
 **Proteções em código, não só no prompt.** Além do bloqueio de pedidos:
 - limite de rodadas de ferramenta por mensagem;
@@ -140,14 +142,17 @@ O princípio é que o código decide e o prompt só diz como falar. As regras s�
 - uma ferramenta que quebra ou um argumento inválido viram um erro em JSON e a conversa segue;
 - o histórico é podado sem separar a chamada de ferramenta da resposta dela.
 
-Também validei cada argumento que o modelo envia (pydantic, com campos desconhecidos rejeitados). Um campo extra com um telefone nunca volta ecoado numa mensagem de erro.
+Também validei cada argumento que o modelo envia com pydantic. Campos desconhecidos são rejeitados, menos nas duas ferramentas de pedido, que os ignoram de propósito: assim, um telefone mandado num campo errado nunca volta ecoado numa mensagem de erro. Os erros de validação citam só o nome do campo, nunca o valor.
 
 **Groq com `gpt-oss-120b`.** Escolhi a Groq porque o plano gratuito não pede cartão, então qualquer avaliador consegue rodar o projeto. A API é compatível com a da OpenAI e responde rápido, o que importa num atendimento que pode encadear várias chamadas por mensagem. O `gpt-oss-120b` é o maior dos modelos abertos da OpenAI. Ele foi treinado para usar ferramentas e se saiu bem em português nos meus testes. O preço foram os limites de 8 mil tokens por minuto e 200 mil por dia, que moldaram o resto do projeto (veja [Limitações](#limitações-e-o-que-eu-faria-com-mais-tempo)).
 
 **Um cliente HTTP próprio.** Usei `httpx` em vez do SDK da OpenAI para deixar explícitos e testáveis os comportamentos que importam:
-- quando a Groq barra por limite (erro 429), esperar o tempo que ela indica e tentar de novo;
+- quando a Groq barra por limite (erro 429), esperar o tempo que ela indica, até 30 segundos, e tentar de novo; acima disso, a Lia responde na hora que está com muitas conversas;
 - repetir com espera crescente quando o servidor falha;
-- repetir quando o modelo gera uma chamada de ferramenta malformada (`tool_use_failed`).
+- repetir quando o modelo gera uma chamada de ferramenta malformada (`tool_use_failed`);
+- tratar um cabeçalho `retry-after` sem sentido ou uma URL inválida como indisponibilidade, não como exceção.
+
+Qualquer erro inesperado dentro de um turno vira a resposta de instabilidade e um registro no log; o cliente nunca vê um traceback. Configuração inválida (temperatura fora da faixa, esforço de raciocínio desconhecido) ou um `.env` salvo fora de UTF-8 param na partida com uma mensagem que diz qual variável corrigir, sem mostrar o valor, com código de saída 3.
 
 **Raciocínio `low` e temperatura `0.3`.** No meu teste, o raciocínio médio gastou cerca de 60% mais tokens de resposta e não acertou mais que o baixo. Com a temperatura padrão apareceram respostas degeneradas; baixar para 0,3 reduziu o problema, mas não acabou com ele (veja [Limitações](#limitações-e-o-que-eu-faria-com-mais-tempo)).
 
@@ -155,11 +160,13 @@ Também validei cada argumento que o modelo envia (pydantic, com campos desconhe
 
 **Interface de linha de comando e histórico só em memória.** O enunciado pede o agente funcionando, e a interface mais simples deixa o foco nele. O CLI também roda roteiros e grava a conversa em Markdown, o que serve para reproduzir uma conversa e para gerar exemplos. O histórico fica em memória, uma sessão por conversa, como numa conversa de WhatsApp aberta: a Lia lembra o que foi dito antes (o número do pedido, o produto de que estávamos falando), e `/nova` começa do zero. Para o modelo vão as 30 mensagens mais recentes, contando as das ferramentas. Não gravei o histórico em disco de propósito, porque ele teria telefones e números de pedido; o registro opcional de turnos (`EMPORIO_TRACE_DIR`) mascara telefone e e-mail. Além disso, a Lia não precisa lembrar do cliente de um dia para o outro, porque o pedido é sempre consultado de novo com verificação. Num canal real, a sessão ficaria guardada pelo número do WhatsApp, com prazo de expiração.
 
-**Testes sem o modelo real.** São 1454 testes, que rodam em cerca de 3 segundos com um modelo simulado. Eles testam a regra de negócio e o encanamento: parcelas nos limites de cada faixa, prazos de troca dia a dia, 17 tentativas de burlar a verificação de pedido, nenhum telefone nos logs, a espera e a nova tentativa do cliente Groq, a camada de arquitetura. O comportamento do modelo é medido em outro lugar, na [avaliação](#avaliação).
+**Testes sem o modelo real.** São 1596 testes, que rodam em cerca de 3 segundos com um modelo simulado. Eles testam a regra de negócio e o encanamento: parcelas nos limites de cada faixa, prazos de troca dia a dia, 20 variações de identidade inválida contra as duas ferramentas de pedido, nenhum telefone nos logs, a espera e a nova tentativa do cliente Groq, a camada de arquitetura. O comportamento do modelo é medido em outro lugar, na [avaliação](#avaliação).
 
 ---
 
 ## O que encontrei nos dados
+
+A loja forneceu seis tabelas em `data/*.csv` (categorias, produtos, promoções, clientes, pedidos e itens de pedido) e o manual `data/políticas_da_loja.pdf`. A Lia usa todas as seis tabelas. O manual eu converti para [`data/policies.md`](data/policies.md), seção por seção, com o texto preservado, porque é mais fácil de versionar, de ler em diff e de dividir por título; é esse arquivo que o agente lê. O PDF original não está no repositório.
 
 Antes de escrever código, li os CSVs e o manual procurando o que poderia fazer a Lia errar. Estas foram as regras que vieram daí:
 
@@ -229,7 +236,7 @@ Telefones de clientes não ficam gravados nos cenários: um marcador como `{phon
 | 2ª | 22/32 | 34 das 38 respostas saíram do modelo reserva por causa do limite por minuto, e ele errou políticas. Foi por isso que desliguei o reserva |
 | 3ª | 0/32 | a cota diária de 200 mil tokens da Groq acabou: todas as mensagens receberam "estou com muitas conversas". A Lia não inventou nada, mas a rodada não mediu nada |
 
-Uma bateria completa gasta cerca de 136 mil tokens, quase 70% da cota diária gratuita. Por isso a avaliação tem pausa configurável entre as mensagens e filtros por cenário e categoria.
+Uma bateria completa gasta cerca de 136 mil tokens, quase 70% da cota diária gratuita. Por isso a avaliação tem pausa configurável entre as mensagens e filtros por cenário e categoria. Ela também se protege da cota: para na hora se a chave for recusada, para depois de 3 erros seguidos do modelo e, se for interrompida, grava o relatório parcial com o motivo em vez de perder o que já rodou.
 
 ## Conversas de exemplo
 
@@ -243,7 +250,10 @@ _A preencher: 3 a 5 conversas reais em [`examples/`](examples/), incluindo uma n
 - **Limite da Groq gratuita.** Cada mensagem com ferramenta gasta de 3,5 a 4 mil tokens. Com 8 mil por minuto, cabem cerca de 2 mensagens assim por minuto. Em produção: plano pago, cache do prompt e enxugar o histórico de ferramentas de turnos antigos.
 - **LGPD.** O telefone que o cliente digita passa pela Groq para que o modelo chame a ferramenta de pedido. Os logs e os registros mascaram telefone e e-mail, mas o envio ao provedor existe. Em produção, eu extrairia o telefone no código antes de chegar ao modelo, ou usaria um provedor com contrato de tratamento de dados.
 - **Sem memória entre conversas e sem atendente humano de verdade.** "A equipe vai acompanhar" é uma orientação ao cliente; não existe fila de atendimento por trás.
-- **O vocabulário da busca no manual depende da numeração atual das seções.** Se o manual for renumerado, esse vocabulário precisa ser revisto.
+- **Identificadores dos dados estão no código.** O vocabulário da busca no manual é por número de seção, as decisões da loja também, e a lista de produtos com ficha não confiável é uma faixa de ids. Renumerar o manual ou reindexar o catálogo quebra em silêncio. Com mais tempo, isso iria para arquivos em `data/` com validação na partida.
+- **Sem limite de tempo por mensagem.** No pior caso aritmético (Groq lenta, três tentativas, várias chamadas de ferramenta), uma mensagem pode levar minutos sem feedback. Eu colocaria um prazo por turno.
+- **O histórico é podado por quantidade de mensagens, não por tamanho.** Uma consulta de três seções do manual devolve cerca de 1.700 tokens e fica até 30 mensagens no histórico. É isso que mais pesa no limite por minuto, mais que o prompt. Com mais tempo, saídas de ferramenta de turnos antigos virariam um resumo.
+- **Os testes do prompt checam frases literais.** Reescrever o prompt quebra dezenas de testes sem que o comportamento tenha mudado. O que eu gostaria de testar, e não testo, é se cada campo que o prompt cita existe de fato nas saídas das ferramentas.
 - **A avaliação checa por texto.** Uma resposta certa escrita de um jeito inesperado pode falhar; reviso cada falha à mão antes de confiar no número. Um modelo juiz ajudaria, mas custaria a cota que não tenho.
 
 ---

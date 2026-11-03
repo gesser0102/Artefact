@@ -46,7 +46,7 @@ def require_iso_date_text(value: object) -> object:
     return value
 
 
-def section_reference_to_text(value: object) -> object:
+def whole_number_to_text(value: object) -> object:
     checked = reject_boolean(value)
     return str(checked) if isinstance(checked, int) else checked
 
@@ -56,7 +56,8 @@ PolicyQuery = Annotated[
     StrictStr,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_POLICY_QUERY_LENGTH),
 ]
-SectionReference = Annotated[StrictStr, BeforeValidator(section_reference_to_text)]
+SectionReference = Annotated[StrictStr, BeforeValidator(whole_number_to_text)]
+PhoneText = Annotated[StrictStr, BeforeValidator(whole_number_to_text)]
 CategoryReference = Annotated[StrictInt | StrictStr, BeforeValidator(numeric_text_to_int)]
 PriceBound = Annotated[Decimal, Field(allow_inf_nan=False)]
 IsoDate = Annotated[date, BeforeValidator(require_iso_date_text)]
@@ -105,7 +106,7 @@ class OrderIdentityInput(ToolInput):
     model_config = ConfigDict(extra="ignore")
 
     order_id: WholeNumber
-    phone: str = Field(repr=False)
+    phone: PhoneText = Field(repr=False)
 
 
 class SearchPoliciesInput(ToolInput):

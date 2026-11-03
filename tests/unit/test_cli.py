@@ -1,4 +1,6 @@
 import io
+import sys
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -7,11 +9,14 @@ from emporio_agent.agent.conversation import TurnResult
 from emporio_agent.agent.tracing import ModelTrace, ToolOutcome, ToolTrace, TurnTrace
 from emporio_agent.cli import (
     DATA_LOAD_MESSAGE,
+    ENV_FILE_ENCODING_MESSAGE,
     EXIT_FAILURE,
+    EXIT_INVALID_CONFIG,
     EXIT_MISSING_API_KEY,
     EXIT_OK,
     FAREWELL,
     GREETING,
+    INPUT_DECODE_MESSAGE,
     MISSING_KEY_MESSAGE,
     NEW_SESSION_NOTICE,
     CliOptions,
@@ -19,11 +24,14 @@ from emporio_agent.cli import (
     redact_personal_data,
     run,
     script_messages,
+    use_utf8_streams,
 )
 from emporio_agent.config import Settings
 from emporio_agent.domain.redaction import REDACTED
 
 CUSTOMER_PHONE = "(67) 99812-3456"
+SECRET_KEY = "gsk_segredo_que_nao_pode_vazar_987"
+SETTINGS_TARGET = "emporio_agent.cli.Settings"
 TRACE = TurnTrace(
     (
         ModelTrace("modelo-a", 1200, 40, 800, 1),
@@ -51,6 +59,19 @@ class FakeAgent:
     def start_session(self) -> FakeSession:
         self.sessions += 1
         return FakeSession(self.sessions, self.received)
+
+
+class InterruptingSession(FakeSession):
+    def reply(self, user_text: str) -> TurnResult:
+        if self.received:
+            raise KeyboardInterrupt
+        return super().reply(user_text)
+
+
+class InterruptingAgent(FakeAgent):
+    def start_session(self) -> InterruptingSession:
+        self.sessions += 1
+        return InterruptingSession(self.sessions, self.received)
 
 
 def options(
@@ -154,6 +175,66 @@ def test_script_mode_runs_without_reading_input(tmp_path):
     ]
 
 
+def test_script_with_byte_order_mark_still_skips_the_first_comment_line(tmp_path):
+    script = tmp_path / "roteiro.txt"
+    script.write_text("# comentário\noi\n", encoding="utf-8-sig")
+
+    code, output, _ = run_cli(FakeAgent(), options(script=script))
+
+    assert code == EXIT_OK
+    assert output.splitlines() == [f"Lia: {GREETING}", "Você: oi", "Lia: resposta 1: oi"]
+
+
+def test_keyboard_interrupt_in_script_mode_writes_the_transcript_and_exits_zero(tmp_path):
+    script = tmp_path / "roteiro.txt"
+    script.write_text("oi\ntem violão?\nnunca chega\n", encoding="utf-8")
+    transcript = tmp_path / "conversa.md"
+    agent = InterruptingAgent()
+
+    code, output, errors = run_cli(agent, options(script=script, transcript=transcript))
+
+    assert code == EXIT_OK
+    assert errors == ""
+    assert output.endswith("Você: tem violão?\n\n")
+    assert agent.received == [(1, "oi")]
+    content = transcript.read_text(encoding="utf-8")
+    assert "**Cliente:** oi" in content
+    assert "**Lia:** resposta 1: oi" in content
+    assert "tem violão?" not in content
+
+
+def test_undecodable_input_ends_the_dialogue_cleanly():
+    def undecodable(prompt: str) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xe7", 0, 1, "invalid start byte")
+
+    output, errors = io.StringIO(), io.StringIO()
+
+    code = run(options(), FakeAgent(), undecodable, output, errors)
+
+    assert code == EXIT_OK
+    assert output.getvalue() == f"Lia: {GREETING}\n\n"
+    assert errors.getvalue() == f"{INPUT_DECODE_MESSAGE}\n"
+    assert "UTF-8" in INPUT_DECODE_MESSAGE
+
+
+def test_utf8_streams_replace_undecodable_input_and_unencodable_output(monkeypatch):
+    stdin = io.TextIOWrapper(io.BytesIO("ação\n".encode("cp1252")), encoding="ascii")
+    stdout = io.TextIOWrapper(io.BytesIO(), encoding="ascii", newline="\n")
+    stderr = io.TextIOWrapper(io.BytesIO(), encoding="ascii", newline="\n")
+    for name, stream in (("stdin", stdin), ("stdout", stdout), ("stderr", stderr)):
+        monkeypatch.setattr(sys, name, stream)
+
+    use_utf8_streams()
+    stdout.write("ok \udcff ção\n")
+    stdout.flush()
+    stderr.write("erro \udcff\n")
+    stderr.flush()
+
+    assert stdin.readline() == "a��o\n"
+    assert stdout.buffer.getvalue() == "ok ? ção\n".encode()
+    assert stderr.buffer.getvalue() == b"erro ?\n"
+
+
 def test_unreadable_script_fails_with_exit_one(tmp_path):
     script = tmp_path / "latin1.txt"
     script.write_bytes("ação".encode("latin-1"))
@@ -212,6 +293,42 @@ def test_missing_key_exits_with_code_two(monkeypatch, data_dir):
     assert errors.getvalue() == f"{MISSING_KEY_MESSAGE}\n"
     assert "GROQ_API_KEY" in MISSING_KEY_MESSAGE
     assert ".env" in MISSING_KEY_MESSAGE
+
+
+def test_invalid_config_exits_with_code_three_without_echoing_values(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", SECRET_KEY)
+    monkeypatch.setenv("EMPORIO_TEMPERATURE", "abc")
+    monkeypatch.setenv("EMPORIO_REASONING_EFFORT", "ultra")
+    monkeypatch.setattr(SETTINGS_TARGET, partial(Settings, _env_file=None))
+    output, errors = io.StringIO(), io.StringIO()
+
+    code = main([], read_line=reader(), output=output, errors=errors)
+
+    assert code == EXIT_INVALID_CONFIG
+    assert len(errors.getvalue().splitlines()) == 1
+    assert "EMPORIO_TEMPERATURE" in errors.getvalue()
+    assert "EMPORIO_REASONING_EFFORT" in errors.getvalue()
+    assert ".env" in errors.getvalue()
+    for value in ("abc", "ultra", SECRET_KEY):
+        assert value not in errors.getvalue()
+        assert value not in output.getvalue()
+
+
+def test_env_file_in_another_encoding_exits_with_code_three(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_bytes(f"# configuração\nGROQ_API_KEY={SECRET_KEY}\n".encode("cp1252"))
+    monkeypatch.setattr(SETTINGS_TARGET, partial(Settings, _env_file=env_file))
+    output, errors = io.StringIO(), io.StringIO()
+
+    code = main([], read_line=reader(), output=output, errors=errors)
+
+    assert code == EXIT_INVALID_CONFIG
+    assert errors.getvalue() == f"{ENV_FILE_ENCODING_MESSAGE}\n"
+    assert "UTF-8" in ENV_FILE_ENCODING_MESSAGE
+    assert ".env" in ENV_FILE_ENCODING_MESSAGE
+    assert SECRET_KEY not in errors.getvalue()
+    assert output.getvalue() == ""
 
 
 def test_data_load_failure_exits_with_code_one(tmp_path):

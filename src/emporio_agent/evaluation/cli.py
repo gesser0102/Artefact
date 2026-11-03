@@ -8,9 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
+from pydantic import ValidationError
+
 from emporio_agent.application.ports import ErrorReporter
 from emporio_agent.bootstrap import build_container
-from emporio_agent.config import Settings
+from emporio_agent.config import Settings, invalid_variable_names
 from emporio_agent.domain.exceptions import DataLoadError, EvalCaseError
 from emporio_agent.evaluation.cases import load_cases, select_cases
 from emporio_agent.evaluation.report import render_json, render_markdown, summarize, summary_line
@@ -20,6 +22,7 @@ from emporio_agent.evaluation.runner import CaseRecord, ChatAgent, EvalRunner, S
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_MISSING_API_KEY = 2
+EXIT_INVALID_CONFIG = 3
 PROGRAM_NAME = "python -m emporio_agent.evaluation"
 DEFAULT_CASES_PATH = Path("evals/cases.json")
 DEFAULT_OUTPUT_DIR = Path("evals/results")
@@ -27,11 +30,21 @@ DEFAULT_PAUSE_SECONDS = 20.0
 MARKDOWN_REPORT_NAME = "latest.md"
 JSON_REPORT_NAME = "latest.json"
 ID_SEPARATOR = ","
+VARIABLE_SEPARATOR = ", "
 UTF8 = "utf-8"
+ENCODING_ERRORS = "replace"
+INTERRUPTED_REASON = "interrupted"
 MISSING_KEY_MESSAGE = "GROQ_API_KEY is not set; add it to .env at the project root and retry."
+INVALID_CONFIG_MESSAGE = (
+    "Invalid configuration in: {variables}. Fix these variables in .env or in the environment "
+    "and retry."
+)
+ENV_FILE_ENCODING_MESSAGE = "Could not read .env: it must be saved as UTF-8 text."
 DATA_LOAD_MESSAGE = "Could not load the store data (catalog, orders or policies)."
 CASES_ERROR_MESSAGE = "Invalid evaluation cases: {error}"
 REPORT_WRITE_MESSAGE = "Could not write the reports to {path}."
+STOPPED_EARLY_MESSAGE = "Evaluation stopped early ({reason}); writing the partial report."
+NO_RESULTS_MESSAGE = "Evaluation stopped before any case finished; no report written."
 CASE_PROGRESS = "[{number}/{total}] {case_id} {result}"
 PASS_LABEL = "PASS"
 FAIL_LABEL = "FAIL"
@@ -128,8 +141,33 @@ def run_evaluation(
         sleep,
         on_case=progress_printer(len(cases), errors),
     )
-    records = runner.run(cases)
-    summary = summarize(records, dependencies.primary_model, dependencies.now())
+    aborted_reason: str | None = INTERRUPTED_REASON
+    try:
+        runner.run(cases)
+        aborted_reason = runner.aborted_reason
+    except KeyboardInterrupt:
+        pass
+    finally:
+        exit_code = finish_evaluation(
+            options, dependencies, runner.records, aborted_reason, output, errors
+        )
+    return exit_code
+
+
+def finish_evaluation(
+    options: EvalOptions,
+    dependencies: EvalDependencies,
+    records: Sequence[CaseRecord],
+    aborted_reason: str | None,
+    output: TextIO,
+    errors: TextIO,
+) -> int:
+    if aborted_reason is not None:
+        errors.write(f"{STOPPED_EARLY_MESSAGE.format(reason=aborted_reason)}\n")
+    if not records:
+        errors.write(f"{NO_RESULTS_MESSAGE}\n")
+        return EXIT_FAILURE
+    summary = summarize(records, dependencies.primary_model, dependencies.now(), aborted_reason)
     try:
         write_reports(options.out, render_markdown(records, summary), render_json(records, summary))
     except OSError as error:
@@ -138,13 +176,28 @@ def run_evaluation(
         return EXIT_FAILURE
     output.write(f"{summary_line(summary)} -> {options.out / MARKDOWN_REPORT_NAME}\n")
     output.flush()
-    return EXIT_OK
+    return EXIT_OK if summary.complete else EXIT_FAILURE
 
 
 def use_utf8_streams() -> None:
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
-            stream.reconfigure(encoding=UTF8)
+            stream.reconfigure(encoding=UTF8, errors=ENCODING_ERRORS)
+
+
+def invalid_config_message(error: ValidationError) -> str:
+    variables = VARIABLE_SEPARATOR.join(invalid_variable_names(error))
+    return INVALID_CONFIG_MESSAGE.format(variables=variables)
+
+
+def load_settings(errors: TextIO) -> Settings | None:
+    try:
+        return Settings()
+    except ValidationError as error:
+        errors.write(f"{invalid_config_message(error)}\n")
+    except UnicodeDecodeError:
+        errors.write(f"{ENV_FILE_ENCODING_MESSAGE}\n")
+    return None
 
 
 def main(
@@ -158,7 +211,9 @@ def main(
     output_stream = sys.stdout if output is None else output
     error_stream = sys.stderr if errors is None else errors
     options = parse_options(argv)
-    configured = Settings() if settings is None else settings
+    configured = load_settings(error_stream) if settings is None else settings
+    if configured is None:
+        return EXIT_INVALID_CONFIG
     if configured.groq_api_key is None:
         error_stream.write(f"{MISSING_KEY_MESSAGE}\n")
         return EXIT_MISSING_API_KEY

@@ -7,17 +7,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TextIO
 
+from pydantic import ValidationError
+
 from emporio_agent.agent.conversation import TurnResult
 from emporio_agent.agent.prompts import OFFICIAL_CONTACT
 from emporio_agent.agent.tracing import ModelTrace, ToolTrace, TurnTrace
 from emporio_agent.bootstrap import build_container
-from emporio_agent.config import Settings
+from emporio_agent.config import Settings, invalid_variable_names
 from emporio_agent.domain.exceptions import DataLoadError
 from emporio_agent.domain.redaction import redact_text
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_MISSING_API_KEY = 2
+EXIT_INVALID_CONFIG = 3
 PROGRAM_NAME = "python -m emporio_agent"
 CUSTOMER_PREFIX = "Você: "
 AGENT_PREFIX = "Lia: "
@@ -25,6 +28,9 @@ EXIT_COMMAND = "/sair"
 NEW_SESSION_COMMAND = "/nova"
 COMMENT_PREFIX = "#"
 UTF8 = "utf-8"
+UTF8_SIG = "utf-8-sig"
+ENCODING_ERRORS = "replace"
+VARIABLE_SEPARATOR = ", "
 GREETING = "Oi! Eu sou a Lia, assistente virtual da Empório da Música. Como posso te ajudar hoje?"
 FAREWELL = "Foi um prazer falar com você! Até a próxima."
 NEW_SESSION_NOTICE = "Começando uma nova conversa."
@@ -36,6 +42,15 @@ DATA_LOAD_MESSAGE = (
     "Não consegui carregar os dados da loja (catálogo, pedidos ou políticas). "
     "Verifique a pasta de dados e tente de novo."
 )
+INVALID_CONFIG_MESSAGE = (
+    "A configuração tem valores inválidos em: {variables}. Corrija essas variáveis no arquivo "
+    ".env ou no ambiente e rode de novo."
+)
+ENV_FILE_ENCODING_MESSAGE = (
+    "Não consegui ler o arquivo .env: ele precisa estar salvo como texto UTF-8. "
+    "Salve o arquivo de novo nessa codificação e rode de novo."
+)
+INPUT_DECODE_MESSAGE = "Não consegui ler a entrada como texto UTF-8. Encerrando a conversa."
 SCRIPT_READ_MESSAGE = "Não consegui ler o roteiro {path} como texto UTF-8."
 TRANSCRIPT_WRITE_MESSAGE = "Não consegui gravar a transcrição em {path}."
 TRANSCRIPT_TITLE = "# Conversa com a Lia — Empório da Música"
@@ -206,24 +221,35 @@ def script_messages(lines: Iterable[str]) -> list[str]:
 
 
 def run_script(dialogue: Dialogue, messages: Iterable[str], output: TextIO) -> None:
-    for message in messages:
-        output.write(f"{CUSTOMER_PREFIX}{message}\n")
-        output.flush()
-        if not dialogue.handle(message):
-            return
+    try:
+        for message in messages:
+            output.write(f"{CUSTOMER_PREFIX}{message}\n")
+            output.flush()
+            if not dialogue.handle(message):
+                return
+    except KeyboardInterrupt:
+        output.write("\n")
 
 
-def run_interactive(dialogue: Dialogue, read_line: LineReader, output: TextIO) -> None:
+def run_interactive(
+    dialogue: Dialogue,
+    read_line: LineReader,
+    output: TextIO,
+    errors: TextIO,
+) -> None:
     try:
         while dialogue.handle(read_line(CUSTOMER_PREFIX)):
             pass
     except (EOFError, KeyboardInterrupt):
         output.write("\n")
+    except UnicodeDecodeError:
+        output.write("\n")
+        errors.write(f"{INPUT_DECODE_MESSAGE}\n")
 
 
 def read_script(path: Path, errors: TextIO) -> list[str] | None:
     try:
-        return script_messages(path.read_text(encoding=UTF8).splitlines())
+        return script_messages(path.read_text(encoding=UTF8_SIG).splitlines())
     except (OSError, UnicodeDecodeError):
         errors.write(f"{SCRIPT_READ_MESSAGE.format(path=path)}\n")
         return None
@@ -252,7 +278,7 @@ def run(
     dialogue = Dialogue(agent, output, errors, options.trace)
     try:
         if messages is None:
-            run_interactive(dialogue, read_line, output)
+            run_interactive(dialogue, read_line, output, errors)
         else:
             run_script(dialogue, messages, output)
     finally:
@@ -265,7 +291,22 @@ def run(
 def use_utf8_streams() -> None:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
-            stream.reconfigure(encoding=UTF8)
+            stream.reconfigure(encoding=UTF8, errors=ENCODING_ERRORS)
+
+
+def invalid_config_message(error: ValidationError) -> str:
+    variables = VARIABLE_SEPARATOR.join(invalid_variable_names(error))
+    return INVALID_CONFIG_MESSAGE.format(variables=variables)
+
+
+def load_settings(errors: TextIO) -> Settings | None:
+    try:
+        return Settings()
+    except ValidationError as error:
+        errors.write(f"{invalid_config_message(error)}\n")
+    except UnicodeDecodeError:
+        errors.write(f"{ENV_FILE_ENCODING_MESSAGE}\n")
+    return None
 
 
 def main(
@@ -279,7 +320,9 @@ def main(
     output_stream = sys.stdout if output is None else output
     error_stream = sys.stderr if errors is None else errors
     options = parse_options(argv)
-    configured = Settings() if settings is None else settings
+    configured = load_settings(error_stream) if settings is None else settings
+    if configured is None:
+        return EXIT_INVALID_CONFIG
     if options.debug:
         configured = configured.model_copy(update={"debug": True})
     if configured.groq_api_key is None:

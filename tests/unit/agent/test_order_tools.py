@@ -29,10 +29,15 @@ from fakes import (
 
 TODAY = date(2026, 3, 1)
 OWNER_PHONE = "(11) 91234-5678"
+OWNER_DIGITS = 11912345678
 OTHER_PHONE = "(21) 98765-4321"
+OTHER_DIGITS = 21987654321
+OWNER_EMAIL = "marina.teste@example.com"
 NOT_VERIFIED_OUTPUT = '{"verified":false}'
 BOTH_TOOLS = [get_order_status, assess_return_eligibility]
 CONTACT_KEY_PARTS = ("phone", "email", "city", "customer_id", "last_name", "surname")
+IDENTITY_FIELDS = {"order_id", "phone", "arguments"}
+SUBMITTED_VALUES = (OWNER_PHONE, "91234", "5678", str(OWNER_DIGITS), OWNER_EMAIL, "marina")
 
 
 @pytest.fixture
@@ -112,6 +117,11 @@ def test_order_id_as_numeric_text_is_accepted(context):
     assert json.loads(get_order_status(context, identity(order_id="1")))["verified"] is True
 
 
+@pytest.mark.parametrize("tool", BOTH_TOOLS)
+def test_phone_as_json_integer_is_accepted(tool, context):
+    assert json.loads(tool(context, assess_arguments(phone=OWNER_DIGITS)))["verified"] is True
+
+
 def test_cancellation_note_is_returned_only_for_cancelled_orders(context):
     cancelled = json.loads(get_order_status(context, identity(order_id=2)))
     shipped = json.loads(get_order_status(context, identity(order_id=3)))
@@ -130,25 +140,65 @@ def test_cancellation_note_is_returned_only_for_cancelled_orders(context):
         identity(phone="telefone inválido"),
         identity(phone=""),
         identity(phone="   "),
-        identity(phone=None),
-        identity(phone=11912345678),
-        identity(phone=["(11) 91234-5678"]),
-        identity(order_id=None),
-        identity(order_id="abc"),
-        identity(order_id=True),
-        identity(order_id="9" * 5000),
-        {"order_id": 1},
-        {"phone": OWNER_PHONE},
-        {"order_id": 1, "email": "marina.teste@example.com"},
-        {},
-        None,
-        [],
-        "texto",
-        7,
+        identity(phone=OTHER_DIGITS),
+        identity(phone=99999999999),
+        identity(phone=OWNER_EMAIL),
+        {**identity(order_id=9999), "email": OWNER_EMAIL},
     ],
 )
-def test_every_identity_failure_is_byte_identical(tool, arguments, context):
+def test_every_lookup_failure_is_byte_identical(tool, arguments, context):
     assert tool(context, arguments) == NOT_VERIFIED_OUTPUT
+
+
+SCHEMA_FAILURES = [
+    identity(phone=None),
+    identity(phone=[OWNER_PHONE]),
+    identity(phone={"telefone": OWNER_PHONE}),
+    identity(phone=True),
+    identity(phone=1.5),
+    identity(order_id=None),
+    identity(order_id="abc"),
+    identity(order_id=True),
+    identity(order_id="9" * 5000),
+    identity(order_id=[1]),
+    {"order_id": 1},
+    {"phone": OWNER_PHONE},
+    {"order_id": 1, "email": OWNER_EMAIL},
+    {"order_id": "abc", OWNER_PHONE: OWNER_EMAIL},
+    {},
+    None,
+    [OWNER_PHONE],
+    "texto",
+    OWNER_PHONE,
+    7,
+    OWNER_DIGITS,
+]
+
+
+@pytest.mark.parametrize("tool", BOTH_TOOLS)
+@pytest.mark.parametrize("arguments", SCHEMA_FAILURES)
+def test_every_schema_failure_is_invalid_arguments_without_echo(tool, arguments, context, reporter):
+    output = tool(context, arguments)
+    result = json.loads(output)
+
+    assert result["error"] == "invalid_arguments"
+    assert result["details"]
+    assert {detail["field"] for detail in result["details"]} <= IDENTITY_FIELDS
+    assert all(set(detail) == {"field", "message"} for detail in result["details"])
+    for value in SUBMITTED_VALUES:
+        assert value not in output
+    assert [scope for scope, _ in reporter.reports] == [f"tools.{tool.__name__}"]
+
+
+@pytest.mark.parametrize("tool", BOTH_TOOLS)
+def test_schema_failure_names_the_offending_fields(tool, context):
+    missing_phone = json.loads(tool(context, {"order_id": 1}))
+    bad_order_id = json.loads(tool(context, identity(order_id="abc")))
+    not_an_object = json.loads(tool(context, [1]))
+
+    assert [detail["field"] for detail in missing_phone["details"]] == ["phone"]
+    assert [detail["field"] for detail in bad_order_id["details"]] == ["order_id"]
+    assert [detail["field"] for detail in not_an_object["details"]] == ["arguments"]
 
 
 @pytest.mark.parametrize(

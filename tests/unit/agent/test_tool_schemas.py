@@ -138,6 +138,36 @@ def test_order_identity_hides_the_phone_from_repr_and_errors():
     assert "91234" not in repr(parsed)
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (11912345678, "11912345678"),
+        ("11912345678", "11912345678"),
+        (5511912345678, "5511912345678"),
+    ],
+)
+def test_phone_as_json_integer_becomes_its_decimal_text(raw, expected):
+    assert OrderIdentityInput.model_validate({"order_id": 1, "phone": raw}).phone == expected
+
+
+@pytest.mark.parametrize(
+    "raw", [True, False, 1.5, ["11912345678"], {"telefone": "11912345678"}, None]
+)
+def test_phone_rejects_other_types_without_echoing_them(raw):
+    with pytest.raises(ValidationError) as raised:
+        OrderIdentityInput.model_validate({"order_id": 1, "phone": raw})
+
+    [error] = raised.value.errors(include_url=False, include_context=False, include_input=False)
+    assert error["loc"] == ("phone",)
+    assert "11912345678" not in str(raised.value)
+
+
+@pytest.mark.parametrize("arguments", [None, [], "texto", 7])
+def test_order_identity_rejects_non_object_arguments(arguments):
+    with pytest.raises(ValidationError):
+        OrderIdentityInput.model_validate(arguments)
+
+
 def test_return_input_parses_enums_and_iso_date():
     parsed = AssessReturnEligibilityInput.model_validate(
         {

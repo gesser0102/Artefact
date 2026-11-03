@@ -146,7 +146,9 @@ def test_shared_email_does_not_identify_customer_11_or_43(repository, tools_toda
     by_email_as_phone = get_order_status(tools_today, {"order_id": 10, "phone": customer_11.email})
     by_namesake = get_order_status(tools_today, {"order_id": 10, "phone": customer_43.phone})
 
-    assert {by_email, by_email_as_phone, by_namesake} == {NOT_VERIFIED_OUTPUT}
+    assert {by_email_as_phone, by_namesake} == {NOT_VERIFIED_OUTPUT}
+    assert json.loads(by_email)["error"] == "invalid_arguments"
+    assert customer_11.email not in by_email
 
 
 @pytest.mark.parametrize("order_id", ORDER_IDS)
@@ -329,10 +331,25 @@ def test_assessment_goes_through_the_same_gate(repository, tools_today):
             {"order_id": 9999, "phone": phone_of(repository, 1), "reason": "regret"},
         ),
         assess_return_eligibility(tools_today, {"order_id": 1, "phone": "", "reason": "regret"}),
-        assess_return_eligibility(tools_today, {"order_id": 1, "reason": "regret"}),
     }
+    without_phone = json.loads(
+        assess_return_eligibility(tools_today, {"order_id": 1, "reason": "regret"})
+    )
 
     assert outputs == {NOT_VERIFIED_OUTPUT}
+    assert without_phone == {
+        "error": "invalid_arguments",
+        "details": [{"field": "phone", "message": "Field required"}],
+    }
+
+
+@pytest.mark.parametrize("tool", [get_order_status, assess_return_eligibility])
+def test_integer_phone_verifies_like_text(tool, repository, tools_today):
+    digits = int(digits_of(phone_of(repository, 1)))
+
+    result = json.loads(tool(tools_today, {"order_id": 1, "phone": digits, "reason": "defect"}))
+
+    assert result["verified"] is True
 
 
 def test_phone_never_reaches_the_log_nor_error_output(repository, tools_today, caplog):
@@ -344,7 +361,7 @@ def test_phone_never_reaches_the_log_nor_error_output(repository, tools_today, c
         (get_order_status, {"order_id": "abc", "phone": phone}),
         (get_order_status, {"order_id": True, "phone": phone}),
         (get_order_status, {"order_id": 1, "phone": [phone]}),
-        (get_order_status, {"order_id": 1, "phone": int(digits)}),
+        (get_order_status, {"order_id": "abc", "phone": int(digits)}),
         (get_order_status, {"order_id": 1, "phone": {"telefone": phone}}),
         (get_order_status, {"order_id": "abc", phone: phone}),
         (get_order_status, {"order_id": "abc", digits: True, international: True}),
@@ -371,6 +388,7 @@ def test_phone_never_reaches_the_log_nor_error_output(repository, tools_today, c
     outputs = [tool(tools_today, arguments) for tool, arguments in calls]
 
     assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == len(calls)
+    assert all(json.loads(output)["error"] == "invalid_arguments" for output in outputs)
     for value in (*phone_variants(phone), international):
         assert value not in caplog.text
         assert all(value not in output for output in outputs)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from emporio_agent.agent.conversation import TurnResult
+from emporio_agent.domain.exceptions import ChatModelFailure
 from emporio_agent.evaluation.cases import EvalCase, EvalTurn
 from emporio_agent.evaluation.checks import (
     CustomerContacts,
@@ -15,6 +16,9 @@ from emporio_agent.evaluation.checks import (
 
 MODEL_ERROR_REASON = "model_error"
 MILLISECONDS_PER_SECOND = 1000
+MAX_CONSECUTIVE_MODEL_ERRORS = 3
+AUTHENTICATION_ABORT_REASON = "authentication failed"
+CONSECUTIVE_ERRORS_ABORT_REASON = f"{MAX_CONSECUTIVE_MODEL_ERRORS} consecutive model errors"
 
 
 class ChatSession(Protocol):
@@ -56,11 +60,15 @@ class TurnRecord:
     reasons: tuple[str, ...]
     has_tool_expectations: bool
     tools_passed: bool
-    model_error: bool
+    failure: ChatModelFailure | None
 
     @property
     def passed(self) -> bool:
         return not self.reasons
+
+    @property
+    def model_error(self) -> bool:
+        return self.failure is not None
 
     @property
     def tool_names(self) -> tuple[str, ...]:
@@ -139,7 +147,7 @@ def evaluate_turn(
         reasons=tuple(reasons),
         has_tool_expectations=turn.expect.has_tool_expectations,
         tools_passed=not tool_reasons,
-        model_error=result.failure is not None,
+        failure=result.failure,
     )
 
 
@@ -160,22 +168,62 @@ class EvalRunner:
         self._timer = timer
         self._on_case = on_case
         self._turns_started = 0
+        self._records: list[CaseRecord] = []
+        self._consecutive_model_errors = 0
+        self._aborted_reason: str | None = None
+
+    @property
+    def records(self) -> tuple[CaseRecord, ...]:
+        return tuple(self._records)
+
+    @property
+    def aborted_reason(self) -> str | None:
+        return self._aborted_reason
 
     def run(self, cases: Sequence[EvalCase]) -> tuple[CaseRecord, ...]:
         self._turns_started = 0
-        return tuple(self._run_case(case) for case in cases)
+        self._records = []
+        self._consecutive_model_errors = 0
+        self._aborted_reason = None
+        for case in cases:
+            self._run_case(case)
+            if self._aborted_reason is not None:
+                break
+        return self.records
 
-    def _run_case(self, case: EvalCase) -> CaseRecord:
+    def _run_case(self, case: EvalCase) -> None:
         session = self._agent.start_session()
+        turns: list[TurnRecord] = []
+        try:
+            for turn in case.turns:
+                turns.append(self._run_turn(session, turn))
+                if self._stops_after(turns[-1]):
+                    break
+        finally:
+            if turns:
+                self._record(case, turns)
+
+    def _record(self, case: EvalCase, turns: Sequence[TurnRecord]) -> None:
         record = CaseRecord(
             case_id=case.case_id,
             category=case.category,
             description=case.description,
-            turns=tuple(self._run_turn(session, turn) for turn in case.turns),
+            turns=tuple(turns),
         )
+        self._records.append(record)
         if self._on_case is not None:
             self._on_case(record)
-        return record
+
+    def _stops_after(self, turn: TurnRecord) -> bool:
+        if turn.failure is ChatModelFailure.AUTHENTICATION:
+            self._aborted_reason = AUTHENTICATION_ABORT_REASON
+        elif turn.model_error:
+            self._consecutive_model_errors += 1
+            if self._consecutive_model_errors >= MAX_CONSECUTIVE_MODEL_ERRORS:
+                self._aborted_reason = CONSECUTIVE_ERRORS_ABORT_REASON
+        else:
+            self._consecutive_model_errors = 0
+        return self._aborted_reason is not None
 
     def _run_turn(self, session: ChatSession, turn: EvalTurn) -> TurnRecord:
         self._pause_between_turns()

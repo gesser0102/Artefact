@@ -1,34 +1,49 @@
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 import pytest
 
 from emporio_agent.agent.conversation import TurnResult
+from emporio_agent.agent.guardrails import UNAVAILABLE_REPLY
 from emporio_agent.agent.tracing import ModelTrace, TurnTrace
 from emporio_agent.config import Settings
+from emporio_agent.domain.exceptions import ChatModelFailure
 from emporio_agent.evaluation.cli import (
     DEFAULT_CASES_PATH,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PAUSE_SECONDS,
+    ENV_FILE_ENCODING_MESSAGE,
     EXIT_FAILURE,
+    EXIT_INVALID_CONFIG,
     EXIT_MISSING_API_KEY,
     EXIT_OK,
+    INTERRUPTED_REASON,
     JSON_REPORT_NAME,
     MARKDOWN_REPORT_NAME,
     MISSING_KEY_MESSAGE,
+    NO_RESULTS_MESSAGE,
     EvalDependencies,
     EvalOptions,
     main,
     parse_options,
     run_evaluation,
 )
+from emporio_agent.evaluation.report import STATUS_PARTIAL
 from emporio_agent.evaluation.resolver import EvalDataResolver
+from emporio_agent.evaluation.runner import (
+    AUTHENTICATION_ABORT_REASON,
+    CONSECUTIVE_ERRORS_ABORT_REASON,
+    Sleeper,
+)
 from fakes import InMemoryOrderRepository, RecordingErrorReporter, make_customer, make_order
 
 NOW = datetime(2026, 11, 3, 9, 30, tzinfo=timezone(timedelta(hours=-4)))
 OWNER_PHONE = "(11) 97777-1212"
+SECRET_KEY = "gsk_segredo_que_nao_pode_vazar_987"
+SETTINGS_TARGET = "emporio_agent.evaluation.cli.Settings"
 CASES_DOCUMENT = {
     "cases": [
         {
@@ -74,6 +89,36 @@ class EchoAgent:
         return EchoSession(self.received)
 
 
+class FailingSession:
+    def __init__(self, failure: ChatModelFailure) -> None:
+        self._failure = failure
+
+    def reply(self, user_text: str) -> TurnResult:
+        return TurnResult(text=UNAVAILABLE_REPLY, trace=TurnTrace(()), failure=self._failure)
+
+
+class FailingAgent:
+    def __init__(self, failure: ChatModelFailure) -> None:
+        self._failure = failure
+
+    def start_session(self) -> FailingSession:
+        return FailingSession(self._failure)
+
+
+class InterruptingSession:
+    def reply(self, user_text: str) -> TurnResult:
+        raise KeyboardInterrupt
+
+
+class InterruptingAgent:
+    def start_session(self) -> InterruptingSession:
+        return InterruptingSession()
+
+
+def interrupting_sleep(seconds: float) -> None:
+    raise KeyboardInterrupt
+
+
 def write_cases(tmp_path: Path, document: object = CASES_DOCUMENT) -> Path:
     path = tmp_path / "cases.json"
     path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
@@ -93,14 +138,24 @@ def dependencies(agent: EchoAgent, reporter: RecordingErrorReporter | None = Non
     )
 
 
-def evaluate(tmp_path: Path, *argv: str, agent: EchoAgent | None = None, cases=None):
+def evaluate(tmp_path: Path, *argv: str, agent=None, cases=None, sleep: Sleeper | None = None):
     cases_path = write_cases(tmp_path) if cases is None else cases
     options = parse_options(["--cases", str(cases_path), "--out", str(tmp_path / "out"), *argv])
     output, errors, sleeps = io.StringIO(), io.StringIO(), []
     code = run_evaluation(
-        options, dependencies(agent or EchoAgent()), output, errors, sleeps.append
+        options,
+        dependencies(agent or EchoAgent()),
+        output,
+        errors,
+        sleeps.append if sleep is None else sleep,
     )
     return code, output.getvalue(), errors.getvalue(), sleeps
+
+
+def read_reports(tmp_path: Path) -> tuple[str, dict]:
+    markdown = (tmp_path / "out" / MARKDOWN_REPORT_NAME).read_text(encoding="utf-8")
+    report = json.loads((tmp_path / "out" / JSON_REPORT_NAME).read_text(encoding="utf-8"))
+    return markdown, report
 
 
 def test_parse_options_defaults():
@@ -135,8 +190,70 @@ def test_full_run_writes_reports_and_prints_one_summary_line(tmp_path):
     markdown = (tmp_path / "out" / MARKDOWN_REPORT_NAME).read_text(encoding="utf-8")
     report = json.loads((tmp_path / "out" / JSON_REPORT_NAME).read_text(encoding="utf-8"))
     assert "- Date: 2026-11-03 09:30 (store time)" in markdown
+    assert "- Status: complete" in markdown
+    assert report["summary"]["aborted_reason"] is None
     assert [case["id"] for case in report["cases"]] == ["price", "hours", "order"]
     assert "97777" not in markdown and "97777" not in json.dumps(report)
+
+
+def test_authentication_failure_aborts_and_writes_a_partial_report(tmp_path):
+    agent = FailingAgent(ChatModelFailure.AUTHENTICATION)
+
+    code, output, errors, sleeps = evaluate(tmp_path, "--pause", "5", agent=agent)
+
+    assert code == EXIT_FAILURE
+    assert sleeps == []
+    assert errors.splitlines() == [
+        "[1/3] price FAIL",
+        f"Evaluation stopped early ({AUTHENTICATION_ABORT_REASON}); writing the partial report.",
+    ]
+    assert output.startswith("eval: cases 0.0% (0/1), turns 0.0% (0/1)")
+    assert f"status partial (aborted: {AUTHENTICATION_ABORT_REASON})" in output
+    markdown, report = read_reports(tmp_path)
+    assert f"- Status: partial (aborted: {AUTHENTICATION_ABORT_REASON})" in markdown
+    assert report["summary"]["status"] == STATUS_PARTIAL
+    assert report["summary"]["aborted_reason"] == AUTHENTICATION_ABORT_REASON
+    assert [case["id"] for case in report["cases"]] == ["price"]
+    assert report["cases"][0]["turns"][0]["failure"] == "authentication"
+
+
+def test_three_consecutive_model_errors_abort_the_run(tmp_path):
+    agent = FailingAgent(ChatModelFailure.UNAVAILABLE)
+
+    code, _, errors, sleeps = evaluate(tmp_path, "--pause", "5", agent=agent)
+
+    assert code == EXIT_FAILURE
+    assert sleeps == [5.0, 5.0]
+    assert errors.splitlines()[:2] == ["[1/3] price FAIL", "[2/3] hours FAIL"]
+    assert CONSECUTIVE_ERRORS_ABORT_REASON in errors.splitlines()[2]
+    _, report = read_reports(tmp_path)
+    assert report["summary"]["aborted_reason"] == CONSECUTIVE_ERRORS_ABORT_REASON
+    assert [case["id"] for case in report["cases"]] == ["price", "hours"]
+    assert [len(case["turns"]) for case in report["cases"]] == [1, 2]
+
+
+def test_interrupt_mid_run_writes_a_partial_report(tmp_path):
+    code, output, errors, _ = evaluate(tmp_path, "--pause", "5", sleep=interrupting_sleep)
+
+    assert code == EXIT_FAILURE
+    assert errors.splitlines() == [
+        "[1/3] price PASS",
+        f"Evaluation stopped early ({INTERRUPTED_REASON}); writing the partial report.",
+    ]
+    assert f"status partial (aborted: {INTERRUPTED_REASON})" in output
+    markdown, report = read_reports(tmp_path)
+    assert f"- Status: partial (aborted: {INTERRUPTED_REASON})" in markdown
+    assert report["summary"]["aborted_reason"] == INTERRUPTED_REASON
+    assert [case["id"] for case in report["cases"]] == ["price"]
+
+
+def test_interrupt_before_any_case_finishes_writes_no_report(tmp_path):
+    code, output, errors, _ = evaluate(tmp_path, agent=InterruptingAgent())
+
+    assert code == EXIT_FAILURE
+    assert output == ""
+    assert errors.splitlines()[-1] == NO_RESULTS_MESSAGE
+    assert not (tmp_path / "out").exists()
 
 
 def test_failures_are_data_and_still_exit_zero(tmp_path):
@@ -228,6 +345,40 @@ def test_main_without_api_key_exits_with_two(monkeypatch, data_dir):
 
     assert code == EXIT_MISSING_API_KEY
     assert errors.getvalue() == f"{MISSING_KEY_MESSAGE}\n"
+
+
+def test_main_with_invalid_config_exits_with_three_without_echoing_values(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", SECRET_KEY)
+    monkeypatch.setenv("EMPORIO_LLM_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("EMPORIO_MAX_COMPLETION_TOKENS", "zero")
+    monkeypatch.setattr(SETTINGS_TARGET, partial(Settings, _env_file=None))
+    output, errors = io.StringIO(), io.StringIO()
+
+    code = main([], output=output, errors=errors)
+
+    assert code == EXIT_INVALID_CONFIG
+    assert len(errors.getvalue().splitlines()) == 1
+    assert "EMPORIO_LLM_TIMEOUT_SECONDS" in errors.getvalue()
+    assert "EMPORIO_MAX_COMPLETION_TOKENS" in errors.getvalue()
+    for value in ("zero", SECRET_KEY):
+        assert value not in errors.getvalue()
+    assert output.getvalue() == ""
+
+
+def test_main_with_env_file_in_another_encoding_exits_with_three(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_bytes(f"# configuração\nGROQ_API_KEY={SECRET_KEY}\n".encode("cp1252"))
+    monkeypatch.setattr(SETTINGS_TARGET, partial(Settings, _env_file=env_file))
+    output, errors = io.StringIO(), io.StringIO()
+
+    code = main([], output=output, errors=errors)
+
+    assert code == EXIT_INVALID_CONFIG
+    assert errors.getvalue() == f"{ENV_FILE_ENCODING_MESSAGE}\n"
+    assert "UTF-8" in ENV_FILE_ENCODING_MESSAGE
+    assert SECRET_KEY not in errors.getvalue()
+    assert output.getvalue() == ""
 
 
 @pytest.mark.parametrize("content", ["{ quebrado", json.dumps({"cases": []})])

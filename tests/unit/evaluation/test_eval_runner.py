@@ -14,7 +14,13 @@ from emporio_agent.domain.redaction import REDACTED
 from emporio_agent.evaluation.cases import EvalCase, EvalTurn, TurnExpectation
 from emporio_agent.evaluation.checks import CUSTOMER_PHONE_REASON
 from emporio_agent.evaluation.resolver import EvalDataResolver
-from emporio_agent.evaluation.runner import MODEL_ERROR_REASON, EvalRunner
+from emporio_agent.evaluation.runner import (
+    AUTHENTICATION_ABORT_REASON,
+    CONSECUTIVE_ERRORS_ABORT_REASON,
+    MAX_CONSECUTIVE_MODEL_ERRORS,
+    MODEL_ERROR_REASON,
+    EvalRunner,
+)
 from fakes import (
     FixedClock,
     InMemoryCatalogRepository,
@@ -203,10 +209,112 @@ def test_model_error_fails_the_turn_without_stopping_the_run(tools, resolver):
     failed_turn, recovered_turn = records[0].turns
     assert failed_turn.reasons == (MODEL_ERROR_REASON,)
     assert failed_turn.model_error
+    assert failed_turn.failure is ChatModelFailure.RATE_LIMITED
     assert failed_turn.reply == RATE_LIMITED_REPLY
     assert recovered_turn.passed and not recovered_turn.model_error
+    assert recovered_turn.failure is None
     assert not records[0].passed
     assert records[1].passed
+
+
+def test_authentication_failure_aborts_at_once_keeping_the_partial_case(tools, resolver):
+    model = ScriptedChatModel([ChatModelError(ChatModelFailure.AUTHENTICATION), completion("x")])
+    first = EvalCase(
+        "first", "policy", "d", (EvalTurn("1", TurnExpectation()), EvalTurn("2", TurnExpectation()))
+    )
+    agent = make_agent(model, tools)
+    sleeps: list[float] = []
+    runner = make_runner(agent, resolver, sleeps)
+
+    records = runner.run([first, single_turn_case("second", "3", TurnExpectation())])
+
+    assert runner.aborted_reason == AUTHENTICATION_ABORT_REASON
+    assert runner.records == records
+    assert [record.case_id for record in records] == ["first"]
+    assert len(records[0].turns) == 1
+    assert records[0].turns[0].failure is ChatModelFailure.AUTHENTICATION
+    assert sleeps == []
+    assert agent.sessions == 1
+
+
+def test_consecutive_model_errors_abort_after_the_limit(tools, resolver):
+    model = ScriptedChatModel(
+        [
+            ChatModelError(ChatModelFailure.UNAVAILABLE),
+            ChatModelError(ChatModelFailure.TIMEOUT),
+            ChatModelError(ChatModelFailure.RATE_LIMITED),
+            completion("nunca"),
+        ]
+    )
+    second = EvalCase(
+        "second",
+        "policy",
+        "d",
+        (EvalTurn("2", TurnExpectation()), EvalTurn("3", TurnExpectation())),
+    )
+    cases = [
+        single_turn_case("first", "1", TurnExpectation()),
+        second,
+        single_turn_case("third", "4", TurnExpectation()),
+    ]
+    agent = make_agent(model, tools)
+    sleeps: list[float] = []
+    runner = make_runner(agent, resolver, sleeps)
+
+    records = runner.run(cases)
+
+    assert runner.aborted_reason == CONSECUTIVE_ERRORS_ABORT_REASON
+    assert [record.case_id for record in records] == ["first", "second"]
+    assert [len(record.turns) for record in records] == [1, 2]
+    assert len(model.calls) == MAX_CONSECUTIVE_MODEL_ERRORS
+    assert sleeps == [PAUSE_SECONDS, PAUSE_SECONDS]
+    assert agent.sessions == 2
+
+
+def test_model_errors_separated_by_a_success_do_not_abort(tools, resolver):
+    model = ScriptedChatModel(
+        [
+            ChatModelError(ChatModelFailure.UNAVAILABLE),
+            ChatModelError(ChatModelFailure.UNAVAILABLE),
+            completion("ok"),
+            ChatModelError(ChatModelFailure.UNAVAILABLE),
+            ChatModelError(ChatModelFailure.UNAVAILABLE),
+        ]
+    )
+    cases = [single_turn_case(str(index), str(index), TurnExpectation()) for index in range(5)]
+    runner = make_runner(make_agent(model, tools), resolver, [])
+
+    records = runner.run(cases)
+
+    assert runner.aborted_reason is None
+    assert len(records) == 5
+
+
+def test_interrupt_during_the_pause_keeps_the_finished_turns(tools, resolver):
+    model = ScriptedChatModel([completion("a"), completion("b")])
+    two_turns = EvalCase(
+        "two", "policy", "d", (EvalTurn("1", TurnExpectation()), EvalTurn("2", TurnExpectation()))
+    )
+    seen: list[str] = []
+
+    def interrupting_sleep(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    runner = EvalRunner(
+        make_agent(model, tools),
+        resolver,
+        PAUSE_SECONDS,
+        interrupting_sleep,
+        on_case=lambda record: seen.append(record.case_id),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.run([two_turns, single_turn_case("one", "3", TurnExpectation())])
+
+    assert runner.aborted_reason is None
+    assert [record.case_id for record in runner.records] == ["two"]
+    assert len(runner.records[0].turns) == 1
+    assert seen == ["two"]
 
 
 def test_sleeps_between_turns_but_not_after_the_last(tools, resolver):

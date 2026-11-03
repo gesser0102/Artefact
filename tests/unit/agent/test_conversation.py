@@ -54,6 +54,7 @@ NOW = datetime(2026, 11, 2, 14, 35, tzinfo=timezone(timedelta(hours=-4)))
 OWNER_PHONE = "(67) 99123-4567"
 OWNER_DIGITS = "67991234567"
 WRONG_PHONE = "(67) 98888-7777"
+WRONG_DIGITS = "67988887777"
 TICK_SECONDS = 0.01
 
 
@@ -337,6 +338,46 @@ def test_failure_mid_turn_keeps_only_the_user_message(tools):
     )
 
 
+def test_unexpected_error_mid_turn_is_reported_and_answered_as_unavailable(tools, reporter):
+    model = ScriptedChatModel(
+        [
+            completion(None, tool_call("list_categories")),
+            RuntimeError("falha inesperada no cliente"),
+            completion("Agora sim"),
+        ]
+    )
+    session = make_agent(model, tools).start_session()
+
+    result = session.reply("primeira")
+
+    assert result.text == UNAVAILABLE_REPLY
+    assert result.failure is ChatModelFailure.UNAVAILABLE
+    assert session.history == (ChatMessage(Role.USER, "primeira"),)
+    assert [step.name for step in result.trace.tool_steps] == ["list_categories"]
+    [(scope, error)] = reporter.reports
+    assert scope == "agent.turn"
+    assert isinstance(error, RuntimeError)
+    assert session.reply("segunda").text == "Agora sim"
+    assert model.calls[2].messages[1:] == (
+        ChatMessage(Role.USER, "primeira"),
+        ChatMessage(Role.USER, "segunda"),
+    )
+
+
+def test_keyboard_interrupt_propagates_through_the_turn(tools, reporter):
+    class InterruptedModel:
+        def complete(self, messages, tools, allow_tools=True):
+            raise KeyboardInterrupt
+
+    session = make_agent(InterruptedModel(), tools).start_session()
+
+    with pytest.raises(KeyboardInterrupt):
+        session.reply("oi")
+
+    assert reporter.reports == []
+    assert session.history == ()
+
+
 def test_too_long_message_is_answered_without_calling_the_model(tools):
     model = ScriptedChatModel([completion("ok")])
     session = make_agent(model, tools).start_session()
@@ -377,6 +418,43 @@ def test_identity_lockout_after_three_failures_blocks_order_tools(tools):
     assert outputs[4] == outputs[5] == LOCKED_OUTPUT == '{"verified":false,"locked":true}'
     assert "Violões" in outputs[6]
     assert [step.outcome for step in result.trace.tool_steps][4:6] == [ToolOutcome.LOCKED] * 2
+
+
+def test_schema_errors_never_count_toward_the_lockout(tools):
+    malformed = (
+        tool_call("get_order_status", {"order_id": 1, "phone": [OWNER_PHONE]}, "m1"),
+        tool_call("get_order_status", {"order_id": "abc", "phone": OWNER_PHONE}, "m2"),
+        tool_call("assess_return_eligibility", {"order_id": 1, "reason": "regret"}, "m3"),
+    )
+    model = ScriptedChatModel(
+        [completion(None, *malformed, order_call(OWNER_PHONE, "ok")), completion("Achei")]
+    )
+
+    result = make_agent(model, tools).start_session().reply("meu pedido")
+
+    outputs = [message.content for message in tool_messages(model, 1)]
+    assert [json.loads(output)["error"] for output in outputs[:3]] == ["invalid_arguments"] * 3
+    assert all(OWNER_DIGITS[-8:] not in output for output in outputs[:3])
+    assert json.loads(outputs[3])["verified"] is True
+    assert [step.outcome for step in result.trace.tool_steps] == [
+        *[ToolOutcome.REJECTED] * 3,
+        ToolOutcome.OK,
+    ]
+
+
+def test_integer_phones_that_do_not_match_still_lock(tools):
+    failures = [
+        tool_call("get_order_status", {"order_id": 1, "phone": int(WRONG_DIGITS)}, f"f{index}")
+        for index in range(MAX_FAILED_IDENTITY_ATTEMPTS)
+    ]
+    model = ScriptedChatModel(
+        [completion(None, *failures, order_call(OWNER_PHONE, "late")), completion("Bloqueado")]
+    )
+
+    make_agent(model, tools).start_session().reply("meu pedido")
+
+    outputs = [message.content for message in tool_messages(model, 1)]
+    assert outputs == [*[NOT_VERIFIED_OUTPUT] * MAX_FAILED_IDENTITY_ATTEMPTS, LOCKED_OUTPUT]
 
 
 def test_lockout_persists_across_turns_but_not_sessions(tools):

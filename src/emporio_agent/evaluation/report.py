@@ -19,6 +19,8 @@ REASON_SEPARATOR = "; "
 MEDIAN_PERCENTILE = 50
 TAIL_PERCENTILE = 95
 JSON_INDENT = 2
+STATUS_COMPLETE = "complete"
+STATUS_PARTIAL = "partial"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,15 @@ class EvalSummary:
     retries: int
     fallback_turns: int
     model_error_turns: int
+    aborted_reason: str | None = None
+
+    @property
+    def complete(self) -> bool:
+        return self.aborted_reason is None
+
+    @property
+    def status(self) -> str:
+        return STATUS_COMPLETE if self.complete else STATUS_PARTIAL
 
     @property
     def total_tokens(self) -> int:
@@ -89,6 +100,7 @@ def summarize(
     cases: Sequence[CaseRecord],
     primary_model: str,
     generated_at: datetime,
+    aborted_reason: str | None = None,
 ) -> EvalSummary:
     turns = all_turns(cases)
     tool_turns = [turn for turn in turns if turn.has_tool_expectations]
@@ -111,7 +123,14 @@ def summarize(
         retries=sum(turn.retries for turn in turns),
         fallback_turns=sum(1 for turn in turns if uses_fallback(turn, primary_model)),
         model_error_turns=sum(1 for turn in turns if turn.model_error),
+        aborted_reason=aborted_reason,
     )
+
+
+def status_label(summary: EvalSummary) -> str:
+    if summary.aborted_reason is None:
+        return summary.status
+    return f"{summary.status} (aborted: {summary.aborted_reason})"
 
 
 def format_rate(part: int, whole: int) -> str:
@@ -134,7 +153,7 @@ def summary_line(summary: EvalSummary) -> str:
         f"turns {format_rate(summary.turns_passed, summary.turns)}, "
         f"tool selection {format_rate(summary.tool_turns_passed, summary.tool_turns)}, "
         f"tokens {summary.total_tokens}, p95 {summary.p95_ms} ms, "
-        f"model errors {summary.model_error_turns}"
+        f"model errors {summary.model_error_turns}, status {status_label(summary)}"
     )
 
 
@@ -147,6 +166,7 @@ def header_lines(summary: EvalSummary) -> list[str]:
         REPORT_TITLE,
         "",
         f"- Date: {summary.generated_at.strftime(DATE_FORMAT)} ({STORE_TIME_LABEL})",
+        f"- Status: {status_label(summary)}",
         f"- Models used: {', '.join(summary.models) or NOT_AVAILABLE} "
         f"(primary {summary.primary_model})",
         f"- Cases: {summary.cases} · Turns: {summary.turns}",
@@ -235,6 +255,7 @@ def turn_payload(turn: TurnRecord) -> dict[str, Any]:
         "has_tool_expectations": turn.has_tool_expectations,
         "tools_passed": turn.tools_passed,
         "model_error": turn.model_error,
+        "failure": None if turn.failure is None else turn.failure.value,
         "prompt_tokens": turn.prompt_tokens,
         "completion_tokens": turn.completion_tokens,
         "models": list(turn.models),
@@ -256,6 +277,8 @@ def case_payload(case: CaseRecord) -> dict[str, Any]:
 def summary_payload(summary: EvalSummary) -> dict[str, Any]:
     return {
         "generated_at": summary.generated_at.isoformat(),
+        "status": summary.status,
+        "aborted_reason": summary.aborted_reason,
         "primary_model": summary.primary_model,
         "models": list(summary.models),
         "cases": summary.cases,

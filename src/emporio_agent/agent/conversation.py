@@ -51,6 +51,7 @@ TOOL_FAILED_OUTPUT = to_tool_json(serialize_error(TOOL_FAILED_ERROR))
 MAX_TRACED_TOOL_NAME_CHARS = 64
 MILLISECONDS_PER_SECOND = 1000
 TRACE_SCOPE = "agent.trace"
+TURN_SCOPE = "agent.turn"
 
 type PolicyIndexProvider = Callable[[], Sequence[PolicyIndexEntry]]
 type Timer = Callable[[], float]
@@ -119,6 +120,12 @@ class Session:
         except ChatModelError as error:
             self._history.append(user_message)
             return self._finish(reply_for_failure(error.reason), steps, error.reason)
+        except Exception as error:
+            self._tools.report_error(TURN_SCOPE, error)
+            self._history.append(user_message)
+            return self._finish(
+                reply_for_failure(ChatModelFailure.UNAVAILABLE), steps, ChatModelFailure.UNAVAILABLE
+            )
         self._history.extend(turn_messages)
         return self._finish(text, steps)
 

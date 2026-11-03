@@ -1,8 +1,11 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+from emporio_agent.domain.exceptions import ChatModelFailure
 from emporio_agent.domain.redaction import REDACTED
 from emporio_agent.evaluation.report import (
+    STATUS_COMPLETE,
+    STATUS_PARTIAL,
     percentile,
     render_json,
     render_markdown,
@@ -26,7 +29,7 @@ def turn(
     duration_ms=1000,
     has_tool_expectations=False,
     tools_passed=True,
-    model_error=False,
+    failure=None,
     reply="Oi!",
     user="oi",
 ) -> TurnRecord:
@@ -37,12 +40,12 @@ def turn(
         prompt_tokens=1000,
         completion_tokens=50,
         models=tuple(models),
-        retries=1 if model_error else 0,
+        retries=1 if failure else 0,
         duration_ms=duration_ms,
         reasons=tuple(reasons),
         has_tool_expectations=has_tool_expectations,
         tools_passed=tools_passed,
-        model_error=model_error,
+        failure=failure,
     )
 
 
@@ -81,12 +84,19 @@ CASES = (
         "policy",
         "Domingo",
         (
-            turn(reasons=["model_error"], model_error=True, models=(), duration_ms=200),
+            turn(
+                reasons=["model_error"],
+                failure=ChatModelFailure.UNAVAILABLE,
+                models=(),
+                duration_ms=200,
+            ),
             turn(duration_ms=1200),
         ),
     ),
 )
 SUMMARY = summarize(CASES, PRIMARY, GENERATED_AT)
+ABORT_REASON = "authentication failed"
+PARTIAL_SUMMARY = summarize(CASES[:1], PRIMARY, GENERATED_AT, ABORT_REASON)
 
 
 def test_percentile_uses_nearest_rank():
@@ -112,12 +122,16 @@ def test_summary_metrics():
     assert SUMMARY.retries == 1
     assert SUMMARY.fallback_turns == 1
     assert SUMMARY.model_error_turns == 1
+    assert SUMMARY.aborted_reason is None
+    assert SUMMARY.complete
+    assert SUMMARY.status == STATUS_COMPLETE
 
 
 def test_markdown_has_headline_metrics_table_and_transcripts():
     markdown = render_markdown(CASES, SUMMARY)
 
     assert "- Date: 2026-11-03 14:05 (store time)" in markdown
+    assert "- Status: complete" in markdown
     assert f"- Models used: {PRIMARY}, {FALLBACK} (primary {PRIMARY})" in markdown
     assert "- Cases: 3 · Turns: 4" in markdown
     assert "- Case pass rate: 33.3% (1/3)" in markdown
@@ -144,6 +158,10 @@ def test_json_report_mirrors_summary_and_cases():
 
     assert payload["summary"]["cases_passed"] == 1
     assert payload["summary"]["generated_at"] == GENERATED_AT.isoformat()
+    assert payload["summary"]["status"] == STATUS_COMPLETE
+    assert payload["summary"]["aborted_reason"] is None
+    assert payload["cases"][0]["turns"][0]["failure"] is None
+    assert payload["cases"][2]["turns"][0]["failure"] == "unavailable"
     assert payload["summary"]["categories"][0] == {"category": "orders", "cases": 2, "passed": 1}
     assert payload["cases"][0]["turns"][0]["tools"] == [
         {
@@ -184,3 +202,22 @@ def test_summary_line_is_a_single_line():
     assert "\n" not in line
     assert line.startswith("eval: cases 33.3% (1/3), turns 50.0% (2/4)")
     assert "tool selection 50.0% (1/2)" in line
+    assert line.endswith("status complete")
+
+
+def test_partial_summary_exposes_the_abort_reason():
+    assert PARTIAL_SUMMARY.aborted_reason == ABORT_REASON
+    assert not PARTIAL_SUMMARY.complete
+    assert PARTIAL_SUMMARY.status == STATUS_PARTIAL
+    assert (PARTIAL_SUMMARY.cases, PARTIAL_SUMMARY.turns) == (1, 1)
+
+
+def test_partial_run_is_marked_in_every_output():
+    markdown = render_markdown(CASES[:1], PARTIAL_SUMMARY)
+    payload = json.loads(render_json(CASES[:1], PARTIAL_SUMMARY))
+    line = summary_line(PARTIAL_SUMMARY)
+
+    assert f"- Status: partial (aborted: {ABORT_REASON})" in markdown
+    assert payload["summary"]["status"] == STATUS_PARTIAL
+    assert payload["summary"]["aborted_reason"] == ABORT_REASON
+    assert line.endswith(f"status partial (aborted: {ABORT_REASON})")

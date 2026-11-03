@@ -1,4 +1,5 @@
 import json
+import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -93,6 +94,8 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
     try:
         seconds = float(raw)
     except ValueError:
+        return None
+    if not math.isfinite(seconds):
         return None
     return max(seconds, 0.0)
 
@@ -285,7 +288,7 @@ class GroqChatModel:
             )
         except httpx.TimeoutException:
             return AttemptFailure(ChatModelFailure.TIMEOUT, None, backoff_seconds(attempt))
-        except httpx.TransportError:
+        except (httpx.HTTPError, httpx.InvalidURL):
             return AttemptFailure(ChatModelFailure.UNAVAILABLE, None, backoff_seconds(attempt))
         if response.is_success:
             return self._decoded(response)

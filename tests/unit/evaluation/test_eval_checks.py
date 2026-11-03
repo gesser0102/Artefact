@@ -143,6 +143,24 @@ def test_contacts_never_include_the_official_contact():
     assert contacts.emails == frozenset()
 
 
+@pytest.mark.parametrize(
+    "phone",
+    [
+        "67 9 9999 0000",
+        "(67) 9 9999-0000",
+        "67-9-9999-0000",
+        "67 99999.0000",
+        f"(67){NO_BREAK_SPACE}9{NO_BREAK_SPACE}9999{NON_BREAKING_HYPHEN}0000",
+    ],
+)
+def test_mask_personal_data_covers_every_phone_format_the_lookup_accepts(phone):
+    text = f"Fale no (67) 3341-4444. Seu tel {phone}, pedido 12 de R$ 1.127,00 em 2026-02-28."
+
+    assert mask_personal_data(text) == (
+        f"Fale no (67) 3341-4444. Seu tel {REDACTED}, pedido 12 de R$ 1.127,00 em 2026-02-28."
+    )
+
+
 def test_mask_personal_data_keeps_official_contact_and_redacts_customers():
     text = (
         f"Equipe: (67) 3341{NON_BREAKING_HYPHEN}4444, contato@emporiodamusica.com.br. "

@@ -1,16 +1,16 @@
 import json
 import logging
 import shutil
-from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from emporio_agent.agent.conversation import ConversationAgent
 from emporio_agent.agent.tools.catalog_tools import search_products
 from emporio_agent.agent.tools.order_tools import get_order_status
 from emporio_agent.agent.tools.policy_tools import get_policy_sections, search_policies
 from emporio_agent.bootstrap import build_container
-from emporio_agent.config import Settings
+from emporio_agent.config import ENV_FILE, PROJECT_ROOT, Settings, invalid_variable_names
 from emporio_agent.domain.exceptions import DataLoadError
 from emporio_agent.infrastructure.observability.logging import LOGGER_NAME, log_error
 from emporio_agent.infrastructure.persistence.markdown_policy_repository import (
@@ -30,8 +30,61 @@ def test_settings_defaults(monkeypatch):
 
     settings = Settings(_env_file=None)
 
-    assert settings.data_dir == Path("data")
+    assert settings.data_dir == PROJECT_ROOT / "data"
     assert settings.debug is False
+
+
+def test_project_root_is_the_repository_root():
+    assert PROJECT_ROOT.is_absolute()
+    assert (PROJECT_ROOT / "pyproject.toml").is_file()
+    assert ENV_FILE == PROJECT_ROOT / ".env"
+    assert Settings.model_config["env_file"] == ENV_FILE
+
+
+def test_default_data_dir_does_not_depend_on_the_working_directory(monkeypatch, tmp_path):
+    monkeypatch.delenv(DATA_DIR_ENV_VAR, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.data_dir.is_absolute()
+    assert settings.data_dir == PROJECT_ROOT / "data"
+    assert (settings.data_dir / POLICIES_FILE_NAME).is_file()
+    assert build_container(settings).repository.get_order(1) is not None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"temperature": 2.5}, "temperature"),
+        ({"temperature": -0.1}, "temperature"),
+        ({"temperature": "abc"}, "temperature"),
+        ({"reasoning_effort": "ultra"}, "reasoning_effort"),
+        ({"llm_timeout_seconds": 0}, "llm_timeout_seconds"),
+        ({"llm_timeout_seconds": -5}, "llm_timeout_seconds"),
+        ({"max_completion_tokens": 0}, "max_completion_tokens"),
+        ({"llm_base_url": ""}, "llm_base_url"),
+    ],
+)
+def test_settings_reject_invalid_llm_values(overrides, field):
+    with pytest.raises(ValidationError) as raised:
+        Settings(_env_file=None, **overrides)
+
+    assert invalid_variable_names(raised.value) == (f"EMPORIO_{field.upper()}",)
+
+
+def test_settings_accept_every_reasoning_effort_and_the_temperature_bounds():
+    for effort in ("low", "medium", "high"):
+        assert Settings(_env_file=None, reasoning_effort=effort).reasoning_effort == effort
+    assert Settings(_env_file=None, temperature=0).temperature == 0.0
+    assert Settings(_env_file=None, temperature=2).temperature == 2.0
+
+
+def test_invalid_variable_names_use_the_public_groq_key_name():
+    with pytest.raises(ValidationError) as raised:
+        Settings(_env_file=None, groq_api_key=123, temperature="x")
+
+    assert invalid_variable_names(raised.value) == ("GROQ_API_KEY", "EMPORIO_TEMPERATURE")
 
 
 def test_settings_read_environment(monkeypatch, tmp_path):
@@ -71,7 +124,9 @@ def test_build_container_wires_tools_to_real_data(data_dir):
     assert container.repository.get_customer(1) is not None
     assert container.repository.get_order(1) is not None
     assert container.repository.list_order_items(1)
-    assert json.loads(get_order_status(container.tools)) == {"verified": False}
+    no_arguments = json.loads(get_order_status(container.tools))
+    assert no_arguments["error"] == "invalid_arguments"
+    assert "verified" not in no_arguments
     assert container.tools.policies is container.policy_service
     assert container.clock.now().utcoffset() is not None
 
