@@ -13,6 +13,8 @@ INFRASTRUCTURE = f"{PACKAGE}.infrastructure"
 AGENT = f"{PACKAGE}.agent"
 CONFIG = f"{PACKAGE}.config"
 BOOTSTRAP = f"{PACKAGE}.bootstrap"
+CLI = f"{PACKAGE}.cli"
+MAIN = f"{PACKAGE}.__main__"
 SERIALIZATION = f"{AGENT}.tools.serialization"
 
 INTERNAL_IMPORTS_ALLOWED = {
@@ -22,6 +24,8 @@ INTERNAL_IMPORTS_ALLOWED = {
     AGENT: (DOMAIN, APPLICATION, AGENT),
     CONFIG: (),
     BOOTSTRAP: (DOMAIN, APPLICATION, INFRASTRUCTURE, AGENT, CONFIG),
+    CLI: (DOMAIN, APPLICATION, AGENT, CONFIG, BOOTSTRAP),
+    MAIN: (CLI,),
 }
 LAYERS_WITHOUT_THIRD_PARTY = (DOMAIN, APPLICATION)
 DOMAIN_FORBIDDEN_STDLIB = frozenset(
@@ -203,6 +207,11 @@ def test_every_module_belongs_to_a_layer():
         (f"{AGENT}.tools.catalog_tools", f"from {BOOTSTRAP} import build_container"),
         (f"{AGENT}.tools.catalog_tools", "import json"),
         (f"{CONFIG}", f"from {DOMAIN}.models import Product"),
+        (f"{CLI}", f"from {INFRASTRUCTURE}.llm import groq_chat_model"),
+        (f"{BOOTSTRAP}", f"from {CLI} import main"),
+        (f"{AGENT}.conversation", f"from {CLI} import main"),
+        (f"{MAIN}", f"from {BOOTSTRAP} import build_container"),
+        (f"{INFRASTRUCTURE}.llm.groq_chat_model", f"from {AGENT}.tracing import TurnTrace"),
         (
             f"{AGENT}.tools.catalog_tools",
             f"import importlib\nimportlib.import_module('{INFRASTRUCTURE}.persistence')",
@@ -224,6 +233,11 @@ def test_checker_detects_forbidden_imports(module, source):
         (f"{AGENT}.tools.catalog_tools", f"from {APPLICATION}.ports import ErrorReporter"),
         (f"{SERIALIZATION}", "import json"),
         (f"{BOOTSTRAP}", f"from {INFRASTRUCTURE}.persistence import csv_repository"),
+        (f"{CLI}", f"from {BOOTSTRAP} import build_container"),
+        (f"{CLI}", f"from {AGENT}.conversation import TurnResult"),
+        (f"{CLI}", f"from {DOMAIN}.redaction import redact_text"),
+        (f"{MAIN}", f"from {CLI} import main"),
+        (f"{AGENT}.tracing", f"from {DOMAIN}.redaction import redact_text"),
     ],
 )
 def test_checker_accepts_allowed_imports(module, source):

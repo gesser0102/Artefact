@@ -25,7 +25,7 @@ def data_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def container(data_dir) -> Container:
-    return build_container(Settings(data_dir=data_dir, debug=False))
+    return build_container(Settings(_env_file=None, data_dir=data_dir, debug=False))
 
 
 @pytest.fixture(scope="session")

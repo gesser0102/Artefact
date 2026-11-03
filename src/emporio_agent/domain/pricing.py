@@ -23,6 +23,12 @@ class PriceQuote:
     installment_amount: Decimal
 
 
+@dataclass(frozen=True)
+class InstallmentOption:
+    installments: int
+    installment_amount: Decimal
+
+
 def round_money(value: Decimal) -> Decimal:
     return value.quantize(CENTS, rounding=ROUND_HALF_UP)
 
@@ -48,6 +54,16 @@ def max_installments(amount: Decimal) -> int:
         if amount >= minimum_installment(installment_count) * installment_count:
             return installment_count
     return 1
+
+
+def installment_options(amount: Decimal) -> tuple[InstallmentOption, ...]:
+    return tuple(
+        InstallmentOption(
+            installments=installment_count,
+            installment_amount=round_money(amount / installment_count),
+        )
+        for installment_count in range(1, max_installments(amount) + 1)
+    )
 
 
 def quote_price(list_price: Decimal, discount_percent: int | None) -> PriceQuote:

@@ -6,14 +6,19 @@ from emporio_agent.agent.tools.schemas import (
     GetProductInput,
     ListActivePromotionsInput,
     ListCategoriesInput,
+    QuoteInstallmentsInput,
     SearchProductsInput,
 )
 from emporio_agent.agent.tools.serialization import (
     serialize_categories,
+    serialize_installment_quote,
     serialize_product_lookup,
     serialize_promotions,
     serialize_search_result,
 )
+from emporio_agent.domain.pricing import installment_options, round_money
+
+QUOTE_INSTALLMENTS = "quote_installments"
 
 
 def search_products(context: ToolContext, arguments: ToolArguments = None) -> str:
@@ -56,3 +61,11 @@ def list_active_promotions(context: ToolContext, arguments: ToolArguments = None
     return run_tool(
         context, "list_active_promotions", ListActivePromotionsInput, arguments, execute
     )
+
+
+def quote_installments(context: ToolContext, arguments: ToolArguments = None) -> str:
+    def execute(parsed: QuoteInstallmentsInput) -> Mapping[str, Any]:
+        amount = round_money(parsed.amount)
+        return serialize_installment_quote(amount, installment_options(amount), parsed.installments)
+
+    return run_tool(context, QUOTE_INSTALLMENTS, QuoteInstallmentsInput, arguments, execute)

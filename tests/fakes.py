@@ -1,9 +1,18 @@
-from collections.abc import Iterable, Sequence
+import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from emporio_agent.application.conversation.messages import (
+    ChatCompletion,
+    ChatMessage,
+    Role,
+    TokenUsage,
+    ToolCall,
+    ToolSpec,
+)
 from emporio_agent.domain.models import (
     Category,
     Customer,
@@ -114,12 +123,22 @@ class InMemoryOrderRepository:
         return tuple(item for item in self.items if item.order_id == order_id)
 
 
+STORE_TEST_TIMEZONE = timezone(timedelta(hours=-4))
+DEFAULT_TEST_TIME = time(10, 0)
+
+
 @dataclass
 class FixedClock:
     current: date
+    moment: datetime | None = None
 
     def today(self) -> date:
         return self.current
+
+    def now(self) -> datetime:
+        if self.moment is not None:
+            return self.moment
+        return datetime.combine(self.current, DEFAULT_TEST_TIME, STORE_TEST_TIMEZONE)
 
 
 @dataclass
@@ -188,3 +207,62 @@ class RecordingErrorReporter:
 
     def __call__(self, scope: str, error: Exception, **context: Any) -> None:
         self.reports.append((scope, error))
+
+
+FAKE_MODEL_NAME = "fake-model"
+
+
+def tool_call(name: str, arguments: Mapping[str, Any] | str = "{}", call_id: str = "") -> ToolCall:
+    arguments_json = arguments if isinstance(arguments, str) else json.dumps(arguments)
+    return ToolCall(call_id=call_id or f"call_{name}", name=name, arguments_json=arguments_json)
+
+
+def completion(
+    content: str | None = None,
+    *calls: ToolCall,
+    model: str = FAKE_MODEL_NAME,
+    prompt_tokens: int = 100,
+    completion_tokens: int = 10,
+    retries: int = 0,
+) -> ChatCompletion:
+    return ChatCompletion(
+        message=ChatMessage(Role.ASSISTANT, content, tool_calls=calls),
+        model=model,
+        usage=TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+        retries=retries,
+    )
+
+
+@dataclass(frozen=True)
+class RecordedModelCall:
+    messages: tuple[ChatMessage, ...]
+    tools: tuple[ToolSpec, ...]
+    allow_tools: bool
+
+
+@dataclass
+class ScriptedChatModel:
+    responses: list[ChatCompletion | Exception] = field(default_factory=list)
+    calls: list[RecordedModelCall] = field(default_factory=list)
+
+    def complete(
+        self,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSpec],
+        allow_tools: bool = True,
+    ) -> ChatCompletion:
+        self.calls.append(RecordedModelCall(tuple(messages), tuple(tools), allow_tools))
+        if not self.responses:
+            raise AssertionError("ScriptedChatModel has no response left")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+@dataclass
+class RecordingTraceSink:
+    records: list[Mapping[str, Any]] = field(default_factory=list)
+
+    def write(self, record: Mapping[str, Any]) -> None:
+        self.records.append(record)

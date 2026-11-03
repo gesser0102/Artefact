@@ -1,7 +1,8 @@
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from pydantic import ValidationError
@@ -26,9 +27,12 @@ from emporio_agent.application.policies.dtos import (
     PolicySearchResult,
 )
 from emporio_agent.domain.models import OrderStatus
-from emporio_agent.domain.pricing import PriceQuote, format_brl
+from emporio_agent.domain.pricing import InstallmentOption, PriceQuote, format_brl
 
+INSTALLMENT_POLICY_SECTION = "3.1"
 INVALID_ARGUMENTS_ERROR = "invalid_arguments"
+UNKNOWN_TOOL_ERROR = "unknown_tool"
+TOOL_FAILED_ERROR = "tool_failed"
 ARGUMENTS_FIELD = "arguments"
 RECEIVED_ON_FIELD = "received_on"
 INVALID_RECEIVED_ON_MESSAGE = (
@@ -63,6 +67,29 @@ def serialize_quote(quote: PriceQuote) -> dict[str, Any]:
         "pix_price": None if quote.pix_price is None else format_brl(quote.pix_price),
         "max_installments": quote.max_installments,
         "installment_amount": format_brl(quote.installment_amount),
+    }
+
+
+def serialize_installment_quote(
+    amount: Decimal,
+    options: Sequence[InstallmentOption],
+    requested: int | None,
+) -> dict[str, Any]:
+    max_count = options[-1].installments
+    return {
+        "amount": format_brl(amount),
+        "interest_free": True,
+        "max_installments": max_count,
+        "options": [
+            {
+                "installments": option.installments,
+                "installment_amount": format_brl(option.installment_amount),
+            }
+            for option in options
+        ],
+        "requested_installments": requested,
+        "requested_allowed": None if requested is None else requested <= max_count,
+        "policy_section": INSTALLMENT_POLICY_SECTION,
     }
 
 
@@ -154,8 +181,8 @@ def serialize_policy_excerpt(excerpt: PolicyExcerpt) -> dict[str, Any]:
         "section_id": excerpt.section_id,
         "title": excerpt.title,
         "parent_title": excerpt.parent_title,
-        "text": excerpt.text,
         "clarifications": list(excerpt.clarifications),
+        "text": excerpt.text,
     }
 
 
@@ -211,6 +238,32 @@ def serialize_invalid_received_on() -> dict[str, Any]:
 
 def serialize_not_verified() -> dict[str, Any]:
     return {"verified": False}
+
+
+def serialize_locked() -> dict[str, Any]:
+    return {"verified": False, "locked": True}
+
+
+def serialize_error(code: str) -> dict[str, Any]:
+    return {"error": code}
+
+
+def parse_tool_arguments(arguments_json: str) -> dict[str, Any]:
+    if not arguments_json.strip():
+        return {}
+    parsed = json.loads(arguments_json)
+    if not isinstance(parsed, dict):
+        raise ValueError("tool arguments must be a JSON object")
+    return parsed
+
+
+def error_code_of(output: str) -> str | None:
+    try:
+        parsed = json.loads(output)
+    except ValueError:
+        return None
+    code = parsed.get("error") if isinstance(parsed, dict) else None
+    return code if isinstance(code, str) else None
 
 
 def iso_date_or_none(value: date | None) -> str | None:

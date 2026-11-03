@@ -25,6 +25,8 @@ from emporio_agent.domain.returns import PurchaseChannel, ReturnReason
 MAX_SEARCH_LIMIT = 20
 MAX_POLICY_QUERY_LENGTH = 300
 MAX_POLICY_SECTION_IDS = 3
+MAX_INSTALLMENT_QUOTE_AMOUNT = 1_000_000
+MAX_REQUESTED_INSTALLMENTS = 48
 ISO_DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
@@ -92,6 +94,11 @@ class ListCategoriesInput(ToolInput):
 
 class ListActivePromotionsInput(ToolInput):
     pass
+
+
+class QuoteInstallmentsInput(ToolInput):
+    amount: Annotated[PriceBound, Field(gt=0, le=MAX_INSTALLMENT_QUOTE_AMOUNT)]
+    installments: Annotated[WholeNumber, Field(ge=1, le=MAX_REQUESTED_INSTALLMENTS)] | None = None
 
 
 class OrderIdentityInput(ToolInput):

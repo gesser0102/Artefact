@@ -14,6 +14,7 @@ from emporio_agent.agent.tools.schemas import (
     ListActivePromotionsInput,
     ListCategoriesInput,
     OrderIdentityInput,
+    QuoteInstallmentsInput,
     SearchPoliciesInput,
     SearchProductsInput,
 )
@@ -116,6 +117,7 @@ def test_null_arguments_fall_back_to_defaults():
         ListActivePromotionsInput,
         SearchPoliciesInput,
         GetPolicySectionsInput,
+        QuoteInstallmentsInput,
     ],
 )
 def test_every_input_rejects_unknown_arguments(model):
@@ -244,3 +246,41 @@ def test_section_ids_accept_text_and_coerce_integers(raw, expected):
 def test_section_ids_reject_booleans_floats_and_bad_sizes(raw):
     with pytest.raises(ValidationError):
         GetPolicySectionsInput.model_validate({"section_ids": raw})
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("600", Decimal("600")),
+        (" 49.90 ", Decimal("49.90")),
+        (1200, Decimal("1200")),
+        (0.01, Decimal("0.01")),
+    ],
+)
+def test_installment_amount_is_coerced_to_decimal(raw, expected):
+    parsed = QuoteInstallmentsInput.model_validate({"amount": raw})
+
+    assert isinstance(parsed.amount, Decimal)
+    assert parsed.amount == expected
+    assert parsed.installments is None
+
+
+@pytest.mark.parametrize(
+    "raw", [0, "0", -1, "-50", 1_000_001, "NaN", "Infinity", "abc", "", True, None, ["600"]]
+)
+def test_installment_amount_rejects_non_positive_huge_or_non_numeric(raw):
+    with pytest.raises(ValidationError):
+        QuoteInstallmentsInput.model_validate({"amount": raw})
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(1, 1), ("18", 18), (48, 48), (None, None)])
+def test_requested_installments_accept_whole_numbers_up_to_48(raw, expected):
+    parsed = QuoteInstallmentsInput.model_validate({"amount": 600, "installments": raw})
+
+    assert parsed.installments == expected
+
+
+@pytest.mark.parametrize("raw", [0, -3, 49, True, 2.5, "x"])
+def test_requested_installments_reject_out_of_range_or_non_integers(raw):
+    with pytest.raises(ValidationError):
+        QuoteInstallmentsInput.model_validate({"amount": 600, "installments": raw})

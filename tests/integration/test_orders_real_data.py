@@ -12,7 +12,7 @@ from emporio_agent.application.orders.service import OrderService
 from emporio_agent.application.policies.service import PolicyService
 from emporio_agent.domain.identity import normalize_phone
 from emporio_agent.domain.pricing import format_brl
-from emporio_agent.infrastructure.observability.logging import LOGGER_NAME, log_error
+from emporio_agent.infrastructure.observability.logging import LOGGER_NAME, log_error, log_warning
 from fakes import FixedClock, InMemoryPolicyRepository
 
 TODAY = date(2026, 11, 2)
@@ -45,6 +45,7 @@ def tools_on(repository, today: date) -> ToolContext:
         orders=OrderService(repository, repository, FixedClock(today)),
         policies=PolicyService(InMemoryPolicyRepository()),
         report_error=log_error,
+        report_rejected_input=log_warning,
     )
 
 
@@ -369,7 +370,7 @@ def test_phone_never_reaches_the_log_nor_error_output(repository, tools_today, c
 
     outputs = [tool(tools_today, arguments) for tool, arguments in calls]
 
-    assert len([r for r in caplog.records if r.levelno == logging.ERROR]) == len(calls)
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == len(calls)
     for value in (*phone_variants(phone), international):
         assert value not in caplog.text
         assert all(value not in output for output in outputs)

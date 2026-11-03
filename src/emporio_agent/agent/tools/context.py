@@ -20,6 +20,7 @@ class ToolContext:
     orders: OrderService
     policies: PolicyService
     report_error: ErrorReporter
+    report_rejected_input: ErrorReporter
 
 
 def run_tool[Input: ToolInput](
@@ -32,6 +33,6 @@ def run_tool[Input: ToolInput](
     try:
         parsed_arguments = input_model.model_validate({} if arguments is None else arguments)
     except ValidationError as error:
-        context.report_error(f"tools.{tool_name}", error)
+        context.report_rejected_input(f"tools.{tool_name}", error)
         return to_tool_json(serialize_invalid_arguments(error))
     return to_tool_json(execute(parsed_arguments))

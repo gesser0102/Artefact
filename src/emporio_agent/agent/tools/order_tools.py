@@ -27,7 +27,7 @@ def parse_identity(
     try:
         return OrderIdentityInput.model_validate({} if arguments is None else arguments)
     except ValidationError as error:
-        context.report_error(f"tools.{tool_name}", error)
+        context.report_rejected_input(f"tools.{tool_name}", error)
         return None
 
 
@@ -61,7 +61,7 @@ def assess_return_eligibility(context: ToolContext, arguments: ToolArguments = N
                 )
             )
         except InvalidReceivedOnError as error:
-            context.report_error(f"tools.{ASSESS_RETURN_ELIGIBILITY}", error)
+            context.report_rejected_input(f"tools.{ASSESS_RETURN_ELIGIBILITY}", error)
             return serialize_invalid_received_on()
 
     return run_tool(

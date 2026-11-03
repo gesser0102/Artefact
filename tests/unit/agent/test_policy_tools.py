@@ -54,6 +54,7 @@ def context(reporter) -> ToolContext:
         orders=OrderService(InMemoryOrderRepository(), catalog, FixedClock(date(2026, 11, 2))),
         policies=PolicyService(InMemoryPolicyRepository([ABOUT, COMPANY, HOURS, SHIPPING, LOCAL])),
         report_error=reporter,
+        report_rejected_input=reporter,
     )
 
 

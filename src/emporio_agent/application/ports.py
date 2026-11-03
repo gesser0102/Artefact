@@ -1,7 +1,8 @@
-from collections.abc import Sequence
-from datetime import date
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from typing import Any, Protocol
 
+from emporio_agent.application.conversation.messages import ChatCompletion, ChatMessage, ToolSpec
 from emporio_agent.domain.models import Category, Customer, Order, OrderItem, Product, Promotion
 from emporio_agent.domain.policies import PolicySection
 
@@ -35,6 +36,21 @@ class PolicyRepository(Protocol):
 class Clock(Protocol):
     def today(self) -> date: ...
 
+    def now(self) -> datetime: ...
+
 
 class ErrorReporter(Protocol):
     def __call__(self, scope: str, error: Exception, **context: Any) -> None: ...
+
+
+class ChatModel(Protocol):
+    def complete(
+        self,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSpec],
+        allow_tools: bool = True,
+    ) -> ChatCompletion: ...
+
+
+class TraceSink(Protocol):
+    def write(self, record: Mapping[str, Any]) -> None: ...

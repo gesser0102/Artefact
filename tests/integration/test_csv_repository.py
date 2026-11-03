@@ -181,7 +181,7 @@ def test_dangling_reference_raises_data_load_error(data_copy):
 
 def test_load_failure_does_not_log_customer_contact_data(data_copy, caplog, monkeypatch):
     monkeypatch.setenv("EMPORIO_DEBUG", "1")
-    configure_logging(Settings().debug)
+    configure_logging(Settings(_env_file=None).debug)
     replace_in_csv(data_copy, "customers", "1,Lucas", "(67) 99812-3456,Lucas")
 
     with pytest.raises(DataLoadError) as raised:
@@ -231,12 +231,12 @@ def test_log_error_redacts_every_accepted_phone_format(caplog, phone):
 
 def test_emporio_debug_controls_traceback_logging(caplog, monkeypatch):
     monkeypatch.delenv("EMPORIO_DEBUG", raising=False)
-    configure_logging(Settings().debug)
+    configure_logging(Settings(_env_file=None).debug)
     log_error("scope", ValueError("quiet"))
     assert not [record for record in caplog.records if record.levelno == logging.DEBUG]
 
     caplog.clear()
     monkeypatch.setenv("EMPORIO_DEBUG", "1")
-    configure_logging(Settings().debug)
+    configure_logging(Settings(_env_file=None).debug)
     log_error("scope", ValueError("verbose"))
     assert [record for record in caplog.records if record.levelno == logging.DEBUG]

@@ -8,6 +8,7 @@ from emporio_agent.agent.tools.catalog_tools import (
     get_product,
     list_active_promotions,
     list_categories,
+    quote_installments,
     search_products,
 )
 from emporio_agent.agent.tools.context import ToolContext
@@ -26,7 +27,13 @@ from fakes import (
     make_promotion,
 )
 
-ALL_TOOLS = [search_products, get_product, list_categories, list_active_promotions]
+ALL_TOOLS = [
+    search_products,
+    get_product,
+    list_categories,
+    list_active_promotions,
+    quote_installments,
+]
 
 
 @pytest.fixture
@@ -49,6 +56,7 @@ def context(reporter) -> ToolContext:
         orders=OrderService(InMemoryOrderRepository(), repository, FixedClock(date(2026, 11, 2))),
         policies=PolicyService(InMemoryPolicyRepository()),
         report_error=reporter,
+        report_rejected_input=reporter,
     )
 
 
@@ -134,3 +142,83 @@ def test_invalid_arguments_never_echo_the_input(context, reporter):
 )
 def test_hostile_search_arguments_do_not_raise(arguments, context):
     assert isinstance(json.loads(search_products(context, arguments)), dict)
+
+
+def test_quote_installments_returns_every_interest_free_option(context):
+    result = json.loads(quote_installments(context, {"amount": 600}))
+
+    assert result == {
+        "amount": "R$ 600,00",
+        "interest_free": True,
+        "max_installments": 6,
+        "options": [
+            {"installments": 1, "installment_amount": "R$ 600,00"},
+            {"installments": 2, "installment_amount": "R$ 300,00"},
+            {"installments": 3, "installment_amount": "R$ 200,00"},
+            {"installments": 4, "installment_amount": "R$ 150,00"},
+            {"installments": 5, "installment_amount": "R$ 120,00"},
+            {"installments": 6, "installment_amount": "R$ 100,00"},
+        ],
+        "requested_installments": None,
+        "requested_allowed": None,
+        "policy_section": "3.1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "allowed"),
+    [
+        ({"amount": 600, "installments": 6}, True),
+        ({"amount": "600", "installments": "1"}, True),
+        ({"amount": 600, "installments": 10}, False),
+        ({"amount": 120, "installments": 3}, False),
+        ({"amount": 1200, "installments": 12}, True),
+        ({"amount": 1200, "installments": 18}, False),
+    ],
+)
+def test_quote_installments_answers_the_requested_count(arguments, allowed, context):
+    result = json.loads(quote_installments(context, arguments))
+
+    assert result["requested_installments"] == int(arguments["installments"])
+    assert result["requested_allowed"] is allowed
+
+
+def test_quote_installments_for_120_never_offers_three_payments(context):
+    result = json.loads(quote_installments(context, {"amount": "120.00"}))
+
+    assert result["max_installments"] == 2
+    assert [option["installment_amount"] for option in result["options"]] == [
+        "R$ 120,00",
+        "R$ 60,00",
+    ]
+
+
+def test_quote_installments_rounds_amount_to_cents(context):
+    result = json.loads(quote_installments(context, {"amount": "1000.004"}))
+
+    assert result["amount"] == "R$ 1.000,00"
+    assert result["max_installments"] == 10
+    assert result["options"][2]["installment_amount"] == "R$ 333,33"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "field"),
+    [
+        ({}, "amount"),
+        ({"amount": 0}, "amount"),
+        ({"amount": -10}, "amount"),
+        ({"amount": "NaN"}, "amount"),
+        ({"amount": "seiscentos"}, "amount"),
+        ({"amount": True}, "amount"),
+        ({"amount": 600, "installments": 0}, "installments"),
+        ({"amount": 600, "installments": True}, "installments"),
+        ({"amount": 600, "juros": True}, "juros"),
+    ],
+)
+def test_quote_installments_rejects_invalid_arguments(arguments, field, context, reporter):
+    result = json.loads(quote_installments(context, arguments))
+
+    assert result["error"] == "invalid_arguments"
+    assert result["details"][0]["field"] == field
+    [(scope, _)] = reporter.reports
+    assert scope == "tools.quote_installments"
