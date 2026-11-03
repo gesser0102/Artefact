@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -5,12 +6,15 @@ from pydantic import ValidationError
 
 from emporio_agent.agent.tools.schemas import (
     MAX_SEARCH_LIMIT,
+    AssessReturnEligibilityInput,
     GetProductInput,
     ListActivePromotionsInput,
     ListCategoriesInput,
+    OrderIdentityInput,
     SearchProductsInput,
 )
 from emporio_agent.application.catalog.service import DEFAULT_SEARCH_LIMIT
+from emporio_agent.domain.returns import PurchaseChannel, ReturnReason
 
 
 @pytest.mark.parametrize(
@@ -102,3 +106,56 @@ def test_null_arguments_fall_back_to_defaults():
 def test_every_input_rejects_unknown_arguments(model):
     with pytest.raises(ValidationError):
         model.model_validate({"brand": "Yamaha"})
+
+
+def test_order_identity_ignores_unknown_keys_so_they_never_echo_in_errors():
+    with pytest.raises(ValidationError) as raised:
+        OrderIdentityInput.model_validate({"order_id": "abc", "phone": "x", "(11) 91234-5678": 1})
+
+    assert "91234" not in str(raised.value)
+
+
+def test_order_identity_hides_the_phone_from_repr_and_errors():
+    parsed = OrderIdentityInput.model_validate({"order_id": 1, "phone": "(11) 91234-5678"})
+
+    assert "91234" not in repr(parsed)
+
+
+def test_return_input_parses_enums_and_iso_date():
+    parsed = AssessReturnEligibilityInput.model_validate(
+        {
+            "order_id": "1",
+            "phone": "x",
+            "reason": "regret",
+            "channel": "in_store",
+            "received_on": "2026-03-01",
+        }
+    )
+
+    assert parsed.order_id == 1
+    assert parsed.reason is ReturnReason.REGRET
+    assert parsed.channel is PurchaseChannel.IN_STORE
+    assert parsed.received_on == date(2026, 3, 1)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "(11) 91234-5678",
+        "01/03/2026",
+        "20260301",
+        "1767225600",
+        "",
+        20260301,
+        1767225600,
+        True,
+    ],
+)
+def test_received_on_only_accepts_iso_text_and_never_echoes_it(raw):
+    with pytest.raises(ValidationError) as raised:
+        AssessReturnEligibilityInput.model_validate(
+            {"order_id": 1, "phone": "x", "reason": "defect", "received_on": raw}
+        )
+
+    assert "91234" not in str(raised.value)
+    assert "91234" not in str(raised.value.errors(include_input=False, include_context=False))

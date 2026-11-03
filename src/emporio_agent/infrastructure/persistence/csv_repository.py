@@ -1,7 +1,7 @@
 import csv
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
@@ -36,7 +36,7 @@ def read_rows(data_dir: Path, table: str) -> list[dict[str, str]]:
         if not rows:
             raise ValueError("file has no records")
     except (OSError, csv.Error, ValueError) as error:
-        log_error("store.read_rows", error, table=table)
+        log_error("csv_repository.read_rows", error, table=table)
         raise DataLoadError(f"Could not read table {table}") from error
     return rows
 
@@ -51,7 +51,7 @@ def load_table[Record](
         try:
             records.append(parse_row(row))
         except ROW_PARSING_ERRORS as error:
-            log_error("store.load_table", error, table=table, row_number=row_number)
+            log_error("csv_repository.load_table", error, table=table, row_number=row_number)
             raise DataLoadError(f"Could not parse row {row_number} of table {table}") from error
     return records
 
@@ -81,14 +81,14 @@ def group_items_by_order(items: Iterable[OrderItem]) -> dict[int, tuple[OrderIte
 
 
 @dataclass(frozen=True)
-class CsvCatalogRepository:
+class CsvRepository:
     categories_by_id: dict[int, Category]
     products_by_id: dict[int, Product]
     promotions_by_id: dict[int, Promotion]
     active_promotions_by_product_id: dict[int, Promotion]
-    customers_by_id: dict[int, Customer]
-    orders_by_id: dict[int, Order]
-    order_items_by_order_id: dict[int, tuple[OrderItem, ...]]
+    _customers_by_id: dict[int, Customer] = field(repr=False)
+    _orders_by_id: dict[int, Order] = field(repr=False)
+    _order_items_by_order_id: dict[int, tuple[OrderItem, ...]] = field(repr=False)
 
     @classmethod
     def load(cls, data_dir: Path) -> Self:
@@ -107,13 +107,13 @@ class CsvCatalogRepository:
                     [promotion for promotion in promotions if promotion.is_active],
                     "product_id",
                 ),
-                customers_by_id=index_by_id(customers, "customer_id"),
-                orders_by_id=index_by_id(orders, "order_id"),
-                order_items_by_order_id=group_items_by_order(order_items),
+                _customers_by_id=index_by_id(customers, "customer_id"),
+                _orders_by_id=index_by_id(orders, "order_id"),
+                _order_items_by_order_id=group_items_by_order(order_items),
             )
             repository.validate_references()
         except ValueError as error:
-            log_error("store.load", error)
+            log_error("csv_repository.load", error)
             raise DataLoadError("Data files are inconsistent") from error
         return repository
 
@@ -130,17 +130,17 @@ class CsvCatalogRepository:
         )
         require_references(
             "orders.customer_id",
-            (order.customer_id for order in self.orders_by_id.values()),
-            self.customers_by_id,
+            (order.customer_id for order in self._orders_by_id.values()),
+            self._customers_by_id,
         )
         require_references(
             "order_items.order_id",
-            self.order_items_by_order_id,
-            self.orders_by_id,
+            self._order_items_by_order_id,
+            self._orders_by_id,
         )
         require_references(
             "order_items.product_id",
-            (item.product_id for items in self.order_items_by_order_id.values() for item in items),
+            (item.product_id for items in self._order_items_by_order_id.values() for item in items),
             self.products_by_id,
         )
 
@@ -161,3 +161,12 @@ class CsvCatalogRepository:
 
     def get_active_promotion(self, product_id: int) -> Promotion | None:
         return self.active_promotions_by_product_id.get(product_id)
+
+    def get_order(self, order_id: int) -> Order | None:
+        return self._orders_by_id.get(order_id)
+
+    def get_customer(self, customer_id: int) -> Customer | None:
+        return self._customers_by_id.get(customer_id)
+
+    def list_order_items(self, order_id: int) -> Sequence[OrderItem]:
+        return self._order_items_by_order_id.get(order_id, ())

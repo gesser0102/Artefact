@@ -1,19 +1,23 @@
 import json
+from datetime import date
 
 import pytest
 from pydantic import ValidationError
 
 from emporio_agent.agent.tools.catalog_tools import (
-    ToolContext,
     get_product,
     list_active_promotions,
     list_categories,
     search_products,
 )
+from emporio_agent.agent.tools.context import ToolContext
 from emporio_agent.agent.tools.serialization import to_tool_json
 from emporio_agent.application.catalog.service import CatalogService
+from emporio_agent.application.orders.service import OrderService
 from fakes import (
+    FixedClock,
     InMemoryCatalogRepository,
+    InMemoryOrderRepository,
     RecordingErrorReporter,
     make_category,
     make_product,
@@ -38,7 +42,11 @@ def context(reporter) -> ToolContext:
         ],
         promotions=[make_promotion(1, 96, 10)],
     )
-    return ToolContext(catalog=CatalogService(repository), report_error=reporter)
+    return ToolContext(
+        catalog=CatalogService(repository),
+        orders=OrderService(InMemoryOrderRepository(), repository, FixedClock(date(2026, 11, 2))),
+        report_error=reporter,
+    )
 
 
 @pytest.mark.parametrize("tool", ALL_TOOLS)

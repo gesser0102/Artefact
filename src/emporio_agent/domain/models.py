@@ -11,6 +11,17 @@ class ProductStatus(StrEnum):
     COMING_SOON = "coming_soon"
 
 
+class OrderStatus(StrEnum):
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+
+
+AWAITING_SHIPMENT_STATUSES = frozenset({OrderStatus.PENDING, OrderStatus.CONFIRMED})
+
+
 @dataclass(frozen=True)
 class Category:
     category_id: int
@@ -54,7 +65,7 @@ class Order:
     order_id: int
     customer_id: int
     order_date: date
-    status: str
+    status: OrderStatus
     total_brl: Decimal
     payment_method: str
     tracking_code: str | None

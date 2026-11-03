@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from emporio_agent.agent.tools.catalog_tools import search_products
+from emporio_agent.agent.tools.order_tools import get_order_status
 from emporio_agent.bootstrap import build_container
 from emporio_agent.config import Settings
 from emporio_agent.domain.exceptions import DataLoadError
@@ -58,9 +59,10 @@ def test_build_container_wires_tools_to_real_data(data_dir):
     container = build_container(Settings(data_dir=data_dir))
 
     assert json.loads(search_products(container.tools, {"query": "Takamine GD20"}))["returned"] == 1
-    assert container.repository.customers_by_id
-    assert container.repository.orders_by_id
-    assert container.repository.order_items_by_order_id
+    assert container.repository.get_customer(1) is not None
+    assert container.repository.get_order(1) is not None
+    assert container.repository.list_order_items(1)
+    assert json.loads(get_order_status(container.tools)) == {"verified": False}
 
 
 @pytest.mark.parametrize(("debug", "level"), [(True, logging.DEBUG), (False, logging.ERROR)])

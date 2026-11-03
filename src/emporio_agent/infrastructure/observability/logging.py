@@ -17,7 +17,7 @@ SENSITIVE_CONTEXT_KEY_PARTS = (
 )
 SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
-    re.compile(r"\(?\b\d{2}\)?[\s-]?\d{4,5}[\s-]?\d{4}\b"),
+    re.compile(r"(?<!\d)(?:\+?55[\s-]?)?\(?\d{2}\)?[\s-]?\d{4,5}[\s-]?\d{4}(?!\d)"),
     re.compile(r"\bgsk_\w+"),
 )
 

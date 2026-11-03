@@ -1,7 +1,8 @@
 from collections.abc import Sequence
+from datetime import date
 from typing import Any, Protocol
 
-from emporio_agent.domain.models import Category, Product, Promotion
+from emporio_agent.domain.models import Category, Customer, Order, OrderItem, Product, Promotion
 
 
 class CatalogRepository(Protocol):
@@ -16,6 +17,18 @@ class CatalogRepository(Protocol):
     def list_active_promotions(self) -> Sequence[Promotion]: ...
 
     def get_active_promotion(self, product_id: int) -> Promotion | None: ...
+
+
+class OrderRepository(Protocol):
+    def get_order(self, order_id: int) -> Order | None: ...
+
+    def get_customer(self, customer_id: int) -> Customer | None: ...
+
+    def list_order_items(self, order_id: int) -> Sequence[OrderItem]: ...
+
+
+class Clock(Protocol):
+    def today(self) -> date: ...
 
 
 class ErrorReporter(Protocol):

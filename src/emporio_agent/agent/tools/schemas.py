@@ -1,4 +1,6 @@
+import re
 from collections.abc import Mapping
+from datetime import date
 from decimal import Decimal
 from typing import Annotated
 
@@ -13,8 +15,10 @@ from pydantic import (
 )
 
 from emporio_agent.application.catalog.service import DEFAULT_SEARCH_LIMIT
+from emporio_agent.domain.returns import PurchaseChannel, ReturnReason
 
 MAX_SEARCH_LIMIT = 20
+ISO_DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 def reject_boolean(value: object) -> object:
@@ -27,9 +31,16 @@ def numeric_text_to_int(value: object) -> object:
     return int(value) if isinstance(value, str) and value.isdecimal() else value
 
 
+def require_iso_date_text(value: object) -> object:
+    if not isinstance(value, str) or ISO_DATE_PATTERN.fullmatch(value) is None:
+        raise ValueError("expected YYYY-MM-DD")
+    return value
+
+
 WholeNumber = Annotated[int, BeforeValidator(reject_boolean)]
 CategoryReference = Annotated[StrictInt | StrictStr, BeforeValidator(numeric_text_to_int)]
 PriceBound = Annotated[Decimal, Field(allow_inf_nan=False)]
+IsoDate = Annotated[date, BeforeValidator(require_iso_date_text)]
 
 
 class ToolInput(BaseModel):
@@ -64,3 +75,16 @@ class ListCategoriesInput(ToolInput):
 
 class ListActivePromotionsInput(ToolInput):
     pass
+
+
+class OrderIdentityInput(ToolInput):
+    model_config = ConfigDict(extra="ignore")
+
+    order_id: WholeNumber
+    phone: str = Field(repr=False)
+
+
+class AssessReturnEligibilityInput(OrderIdentityInput):
+    reason: ReturnReason
+    channel: PurchaseChannel | None = None
+    received_on: IsoDate | None = None

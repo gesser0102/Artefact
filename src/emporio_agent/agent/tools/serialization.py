@@ -1,5 +1,7 @@
 import json
+import re
 from collections.abc import Iterable, Mapping
+from datetime import date
 from typing import Any
 
 from pydantic import ValidationError
@@ -12,10 +14,35 @@ from emporio_agent.application.catalog.dtos import (
     ProductSummary,
     SearchResult,
 )
+from emporio_agent.application.orders.dtos import (
+    NotVerified,
+    OrderLookup,
+    ReturnLookup,
+)
+from emporio_agent.domain.models import OrderStatus
 from emporio_agent.domain.pricing import PriceQuote, format_brl
 
 INVALID_ARGUMENTS_ERROR = "invalid_arguments"
 ARGUMENTS_FIELD = "arguments"
+RECEIVED_ON_FIELD = "received_on"
+INVALID_RECEIVED_ON_MESSAGE = (
+    "A data de recebimento não pode ser futura nem anterior à data do pedido."
+)
+ORDER_STATUS_LABELS = {
+    OrderStatus.PENDING: "Pendente",
+    OrderStatus.CONFIRMED: "Confirmado",
+    OrderStatus.SHIPPED: "Enviado",
+    OrderStatus.DELIVERED: "Entregue",
+    OrderStatus.CANCELLED: "Cancelado",
+}
+PAYMENT_METHOD_LABELS = {
+    "pix": "PIX",
+    "debit": "Cartão de débito",
+    "boleto": "Boleto bancário",
+}
+CREDIT_PAYMENT_PATTERN = re.compile(r"credit_([0-9]+)x")
+CREDIT_PAYMENT_LABEL = "Cartão de crédito em {installments}x"
+UNKNOWN_PAYMENT_METHOD_LABEL = "Forma de pagamento não identificada"
 
 
 def to_tool_json(payload: Mapping[str, Any]) -> str:
@@ -126,4 +153,66 @@ def serialize_invalid_arguments(error: ValidationError) -> dict[str, Any]:
             }
             for issue in error.errors(include_url=False, include_context=False, include_input=False)
         ],
+    }
+
+
+def serialize_invalid_received_on() -> dict[str, Any]:
+    return {
+        "error": INVALID_ARGUMENTS_ERROR,
+        "details": [{"field": RECEIVED_ON_FIELD, "message": INVALID_RECEIVED_ON_MESSAGE}],
+    }
+
+
+def serialize_not_verified() -> dict[str, Any]:
+    return {"verified": False}
+
+
+def iso_date_or_none(value: date | None) -> str | None:
+    return None if value is None else value.isoformat()
+
+
+def payment_method_label(payment_method: str) -> str:
+    credit_payment = CREDIT_PAYMENT_PATTERN.fullmatch(payment_method)
+    if credit_payment is not None:
+        return CREDIT_PAYMENT_LABEL.format(installments=credit_payment.group(1))
+    return PAYMENT_METHOD_LABELS.get(payment_method, UNKNOWN_PAYMENT_METHOD_LABEL)
+
+
+def serialize_order_lookup(lookup: OrderLookup) -> dict[str, Any]:
+    if isinstance(lookup, NotVerified):
+        return serialize_not_verified()
+    serialized: dict[str, Any] = {
+        "verified": True,
+        "order_id": lookup.order_id,
+        "customer_first_name": lookup.customer_first_name,
+        "status": lookup.status.value,
+        "status_label": ORDER_STATUS_LABELS[lookup.status],
+        "order_date": lookup.order_date.isoformat(),
+        "order_value": format_brl(lookup.order_value),
+        "payment_method_label": payment_method_label(lookup.payment_method),
+        "tracking_code": lookup.tracking_code,
+        "estimated_delivery": iso_date_or_none(lookup.estimated_delivery),
+        "items": [{"name": item.name, "quantity": item.quantity} for item in lookup.items],
+        "requires_human_followup": lookup.requires_human_followup,
+        "followup_reason": None if lookup.followup_reason is None else lookup.followup_reason.value,
+    }
+    if lookup.status is OrderStatus.CANCELLED:
+        serialized["cancellation_note"] = lookup.cancellation_note
+    return serialized
+
+
+def serialize_return_lookup(lookup: ReturnLookup) -> dict[str, Any]:
+    if isinstance(lookup, NotVerified):
+        return serialize_not_verified()
+    assessment = lookup.assessment
+    return {
+        "verified": True,
+        "order_id": lookup.order_id,
+        "outcome": assessment.outcome.value,
+        "missing_information": [item.value for item in assessment.missing_information],
+        "deadline": iso_date_or_none(assessment.deadline),
+        "policy_section": assessment.policy_section,
+        "next_step": assessment.next_step.value,
+        "requirements": [item.value for item in assessment.requirements],
+        "legal_warranty_note": assessment.legal_warranty_note,
     }

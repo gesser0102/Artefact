@@ -8,9 +8,11 @@ import pytest
 
 from emporio_agent.config import Settings
 from emporio_agent.domain.exceptions import DataLoadError
-from emporio_agent.domain.models import ProductStatus
+from emporio_agent.domain.models import OrderStatus, ProductStatus
 from emporio_agent.infrastructure.observability.logging import configure_logging, log_error
-from emporio_agent.infrastructure.persistence.csv_repository import CsvCatalogRepository
+from emporio_agent.infrastructure.persistence.csv_repository import CsvRepository
+
+ORDER_IDS = range(1, 21)
 
 
 @pytest.fixture
@@ -37,10 +39,27 @@ def test_load_indexes_every_table(repository):
     assert len(repository.categories_by_id) == 9
     assert len(repository.products_by_id) == 65
     assert len(repository.promotions_by_id) == 25
-    assert len(repository.orders_by_id) == 20
-    assert sum(len(items) for items in repository.order_items_by_order_id.values()) == 22
-    assert repository.customers_by_id
-    assert len(repository.order_items_by_order_id[15]) == 2
+    assert all(repository.get_order(order_id) for order_id in ORDER_IDS)
+    assert repository.get_order(0) is None
+    assert repository.get_order(21) is None
+    assert sum(len(repository.list_order_items(order_id)) for order_id in ORDER_IDS) == 22
+    assert repository.get_customer(1) is not None
+    assert repository.get_customer(9999) is None
+    assert len(repository.list_order_items(15)) == 2
+    assert repository.list_order_items(9999) == ()
+
+
+def test_customer_and_order_data_are_exposed_only_through_methods(repository):
+    assert not hasattr(repository, "customers_by_id")
+    assert not hasattr(repository, "orders_by_id")
+    assert not hasattr(repository, "order_items_by_order_id")
+
+
+def test_repository_repr_does_not_list_customers(repository):
+    customer = repository.get_customer(1)
+
+    assert customer.city not in repr(repository)
+    assert customer.name not in repr(repository)
 
 
 def test_product_fields_are_typed(repository):
@@ -54,11 +73,13 @@ def test_product_fields_are_typed(repository):
 
 
 def test_order_fields_are_typed_and_blanks_become_none(repository):
-    delivered = repository.orders_by_id[4]
-    pending = repository.orders_by_id[13]
+    delivered = repository.get_order(4)
+    pending = repository.get_order(13)
 
     assert delivered.total_brl == Decimal("799.9")
     assert isinstance(delivered.total_brl, Decimal)
+    assert delivered.status is OrderStatus.DELIVERED
+    assert pending.status is OrderStatus.PENDING
     assert delivered.estimated_delivery == date(2025, 12, 22)
     assert pending.tracking_code is None
     assert pending.estimated_delivery is None
@@ -71,7 +92,7 @@ def test_only_flagged_promotions_are_indexed_as_active(repository):
 
 
 def test_customer_repr_hides_contact_data(repository):
-    customer = repository.customers_by_id[1]
+    customer = repository.get_customer(1)
 
     assert customer.phone not in repr(customer)
     assert customer.email not in repr(customer)
@@ -79,16 +100,44 @@ def test_customer_repr_hides_contact_data(repository):
 
 def test_missing_directory_raises_data_load_error(tmp_path, caplog):
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(tmp_path / "missing")
+        CsvRepository.load(tmp_path / "missing")
 
-    assert "store.read_rows" in caplog.text
+    assert "csv_repository.read_rows" in caplog.text
+    assert "store." not in caplog.text
+
+
+def test_row_parsing_failure_logs_current_scope(data_copy, caplog):
+    replace_in_csv(data_copy, "products", "81,599.9,", "81,abc,")
+
+    with pytest.raises(DataLoadError):
+        CsvRepository.load(data_copy)
+
+    assert "csv_repository.load_table" in caplog.text
+    assert "store." not in caplog.text
+
+
+def test_inconsistent_data_logs_current_scope(data_copy, caplog):
+    replace_in_csv(data_copy, "promotions", "1,102,10", "1,9999,10")
+
+    with pytest.raises(DataLoadError):
+        CsvRepository.load(data_copy)
+
+    assert "csv_repository.load " in caplog.text
+    assert "store." not in caplog.text
+
+
+def test_unknown_order_status_raises_data_load_error(data_copy):
+    replace_in_csv(data_copy, "orders", ",delivered,", ",lost,")
+
+    with pytest.raises(DataLoadError):
+        CsvRepository.load(data_copy)
 
 
 def test_malformed_price_raises_data_load_error(data_copy):
     replace_in_csv(data_copy, "products", "81,599.9,", "81,abc,")
 
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
 
 def test_malformed_specs_raises_data_load_error(data_copy):
@@ -97,21 +146,21 @@ def test_malformed_specs_raises_data_load_error(data_copy):
     )
 
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
 
 def test_unknown_product_status_raises_data_load_error(data_copy):
     replace_in_csv(data_copy, "products", ",discontinued,", ",retired,")
 
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
 
 def test_empty_table_raises_data_load_error(data_copy):
     csv_path(data_copy, "categories").write_text("category_id,name,description\n", encoding="utf-8")
 
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
 
 def test_two_active_promotions_for_one_product_raise_data_load_error(data_copy):
@@ -120,14 +169,14 @@ def test_two_active_promotions_for_one_product_raise_data_load_error(data_copy):
     )
 
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
 
 def test_dangling_reference_raises_data_load_error(data_copy):
     replace_in_csv(data_copy, "promotions", "1,102,10", "1,9999,10")
 
     with pytest.raises(DataLoadError):
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
 
 def test_load_failure_does_not_log_customer_contact_data(data_copy, caplog, monkeypatch):
@@ -136,7 +185,7 @@ def test_load_failure_does_not_log_customer_contact_data(data_copy, caplog, monk
     replace_in_csv(data_copy, "customers", "1,Lucas", "(67) 99812-3456,Lucas")
 
     with pytest.raises(DataLoadError) as raised:
-        CsvCatalogRepository.load(data_copy)
+        CsvRepository.load(data_copy)
 
     assert "99812" not in caplog.text
     assert "99812" not in str(raised.value)
@@ -158,6 +207,26 @@ def test_log_error_redacts_sensitive_values_and_keys(caplog):
     assert "anything" not in caplog.text
     assert "67998123456" not in caplog.text
     assert "'order_id': '7'" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "phone",
+    [
+        "(11) 91234-5678",
+        "11912345678",
+        "11 91234-5678",
+        "55 11 91234-5678",
+        "+55 11 91234-5678",
+        "5511912345678",
+        "+5511912345678",
+    ],
+)
+def test_log_error_redacts_every_accepted_phone_format(caplog, phone):
+    log_error("scope", ValueError(f"contato {phone} fim"))
+
+    assert phone not in caplog.text
+    assert "91234" not in caplog.text
+    assert "contato [redacted] fim" in caplog.text
 
 
 def test_emporio_debug_controls_traceback_logging(caplog, monkeypatch):
