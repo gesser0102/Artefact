@@ -14,6 +14,7 @@ from emporio_agent.domain.models import (
     ProductStatus,
     Promotion,
 )
+from emporio_agent.domain.policies import PolicySection
 
 
 def make_category(category_id: int, name: str) -> Category:
@@ -152,6 +153,33 @@ class InMemoryCatalogRepository:
 
     def get_active_promotion(self, product_id: int) -> Promotion | None:
         return self._promotions_by_product_id.get(product_id)
+
+
+def make_section(
+    section_id: str,
+    title: str,
+    body: str = "",
+    *,
+    parent: PolicySection | None = None,
+) -> PolicySection:
+    return PolicySection(
+        section_id=section_id,
+        title=title,
+        parent_id=None if parent is None else parent.section_id,
+        parent_title=None if parent is None else parent.title,
+        body=body,
+    )
+
+
+@dataclass
+class InMemoryPolicyRepository:
+    sections: Iterable[PolicySection] = ()
+
+    def __post_init__(self) -> None:
+        self.sections = tuple(self.sections)
+
+    def list_sections(self) -> Sequence[PolicySection]:
+        return tuple(self.sections)
 
 
 @dataclass

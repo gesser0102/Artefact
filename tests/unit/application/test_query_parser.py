@@ -6,13 +6,8 @@ from emporio_agent.application.catalog.query_parser import (
     contains_all_tokens,
     parse_query,
     token_matches,
-    tokenize,
     with_synonyms,
 )
-
-
-def test_tokenize_removes_accents_case_and_punctuation():
-    assert tokenize("Violão ELÉTRICO, gd-20!") == ["violao", "eletrico", "gd", "20"]
 
 
 def test_parse_query_splits_category_from_text_tokens():

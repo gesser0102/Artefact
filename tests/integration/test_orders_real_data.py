@@ -9,10 +9,11 @@ from emporio_agent.agent.tools.context import ToolContext
 from emporio_agent.agent.tools.order_tools import assess_return_eligibility, get_order_status
 from emporio_agent.application.catalog.service import CatalogService
 from emporio_agent.application.orders.service import OrderService
+from emporio_agent.application.policies.service import PolicyService
 from emporio_agent.domain.identity import normalize_phone
 from emporio_agent.domain.pricing import format_brl
 from emporio_agent.infrastructure.observability.logging import LOGGER_NAME, log_error
-from fakes import FixedClock
+from fakes import FixedClock, InMemoryPolicyRepository
 
 TODAY = date(2026, 11, 2)
 ORDER_IDS = range(1, 21)
@@ -42,6 +43,7 @@ def tools_on(repository, today: date) -> ToolContext:
     return ToolContext(
         catalog=CatalogService(repository),
         orders=OrderService(repository, repository, FixedClock(today)),
+        policies=PolicyService(InMemoryPolicyRepository()),
         report_error=log_error,
     )
 

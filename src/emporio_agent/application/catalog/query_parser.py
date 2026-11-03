@@ -1,10 +1,9 @@
-import re
-import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from emporio_agent.application.text import tokenize
+
 MIN_PREFIX_TOKEN_LENGTH = 4
-TOKEN_PATTERN = re.compile(r"[a-z]+|[0-9]+")
 STOPWORDS = frozenset(
     {
         "a",
@@ -96,12 +95,6 @@ CATEGORY_IDS_BY_TOKEN = {
 class ParsedQuery:
     category_ids: frozenset[int]
     text_tokens: tuple[str, ...]
-
-
-def tokenize(text: str) -> list[str]:
-    decomposed = unicodedata.normalize("NFKD", text).casefold()
-    unaccented = "".join(char for char in decomposed if not unicodedata.combining(char))
-    return TOKEN_PATTERN.findall(unaccented)
 
 
 def without_stopwords(tokens: Iterable[str]) -> list[str]:

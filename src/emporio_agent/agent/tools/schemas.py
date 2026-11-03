@@ -11,13 +11,20 @@ from pydantic import (
     Field,
     StrictInt,
     StrictStr,
+    StringConstraints,
     model_validator,
 )
 
 from emporio_agent.application.catalog.service import DEFAULT_SEARCH_LIMIT
+from emporio_agent.application.policies.service import (
+    DEFAULT_POLICY_SEARCH_LIMIT,
+    MAX_POLICY_SEARCH_LIMIT,
+)
 from emporio_agent.domain.returns import PurchaseChannel, ReturnReason
 
 MAX_SEARCH_LIMIT = 20
+MAX_POLICY_QUERY_LENGTH = 300
+MAX_POLICY_SECTION_IDS = 3
 ISO_DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
@@ -37,7 +44,17 @@ def require_iso_date_text(value: object) -> object:
     return value
 
 
+def section_reference_to_text(value: object) -> object:
+    checked = reject_boolean(value)
+    return str(checked) if isinstance(checked, int) else checked
+
+
 WholeNumber = Annotated[int, BeforeValidator(reject_boolean)]
+PolicyQuery = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_POLICY_QUERY_LENGTH),
+]
+SectionReference = Annotated[StrictStr, BeforeValidator(section_reference_to_text)]
 CategoryReference = Annotated[StrictInt | StrictStr, BeforeValidator(numeric_text_to_int)]
 PriceBound = Annotated[Decimal, Field(allow_inf_nan=False)]
 IsoDate = Annotated[date, BeforeValidator(require_iso_date_text)]
@@ -82,6 +99,19 @@ class OrderIdentityInput(ToolInput):
 
     order_id: WholeNumber
     phone: str = Field(repr=False)
+
+
+class SearchPoliciesInput(ToolInput):
+    query: PolicyQuery
+    limit: Annotated[WholeNumber, Field(ge=1, le=MAX_POLICY_SEARCH_LIMIT)] = (
+        DEFAULT_POLICY_SEARCH_LIMIT
+    )
+
+
+class GetPolicySectionsInput(ToolInput):
+    section_ids: Annotated[
+        list[SectionReference], Field(min_length=1, max_length=MAX_POLICY_SECTION_IDS)
+    ]
 
 
 class AssessReturnEligibilityInput(OrderIdentityInput):

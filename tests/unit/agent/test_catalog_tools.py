@@ -14,10 +14,12 @@ from emporio_agent.agent.tools.context import ToolContext
 from emporio_agent.agent.tools.serialization import to_tool_json
 from emporio_agent.application.catalog.service import CatalogService
 from emporio_agent.application.orders.service import OrderService
+from emporio_agent.application.policies.service import PolicyService
 from fakes import (
     FixedClock,
     InMemoryCatalogRepository,
     InMemoryOrderRepository,
+    InMemoryPolicyRepository,
     RecordingErrorReporter,
     make_category,
     make_product,
@@ -45,6 +47,7 @@ def context(reporter) -> ToolContext:
     return ToolContext(
         catalog=CatalogService(repository),
         orders=OrderService(InMemoryOrderRepository(), repository, FixedClock(date(2026, 11, 2))),
+        policies=PolicyService(InMemoryPolicyRepository()),
         report_error=reporter,
     )
 

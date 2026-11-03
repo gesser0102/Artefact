@@ -1,15 +1,21 @@
 import json
 import logging
+import shutil
 from pathlib import Path
 
 import pytest
 
 from emporio_agent.agent.tools.catalog_tools import search_products
 from emporio_agent.agent.tools.order_tools import get_order_status
+from emporio_agent.agent.tools.policy_tools import get_policy_sections, search_policies
 from emporio_agent.bootstrap import build_container
 from emporio_agent.config import Settings
 from emporio_agent.domain.exceptions import DataLoadError
 from emporio_agent.infrastructure.observability.logging import LOGGER_NAME, log_error
+from emporio_agent.infrastructure.persistence.markdown_policy_repository import (
+    LOAD_SCOPE,
+    POLICIES_FILE_NAME,
+)
 
 DATA_DIR_ENV_VAR = "EMPORIO_DATA_DIR"
 DEBUG_ENV_VAR = "EMPORIO_DEBUG"
@@ -63,6 +69,30 @@ def test_build_container_wires_tools_to_real_data(data_dir):
     assert container.repository.get_order(1) is not None
     assert container.repository.list_order_items(1)
     assert json.loads(get_order_status(container.tools)) == {"verified": False}
+    assert container.tools.policies is container.policy_service
+
+
+def test_build_container_wires_policy_tools_to_the_real_manual(data_dir):
+    container = build_container(Settings(data_dir=data_dir))
+
+    search = json.loads(search_policies(container.tools, {"query": "qual o cnpj"}))
+    lookup = json.loads(get_policy_sections(container.tools, {"section_ids": ["4.2"]}))
+
+    assert search["query_matched"] is True
+    assert search["sections"][0]["section_id"] == "1.2"
+    assert lookup["sections"][0]["title"] == "Trocas por Defeito"
+    assert len(container.policy_service.index()) == 28
+
+
+def test_build_container_requires_the_policy_manual(tmp_path, data_dir, caplog):
+    for csv_path in data_dir.glob("*.csv"):
+        shutil.copy(csv_path, tmp_path / csv_path.name)
+
+    with pytest.raises(DataLoadError):
+        build_container(Settings(data_dir=tmp_path))
+
+    assert LOAD_SCOPE in caplog.text
+    assert POLICIES_FILE_NAME in caplog.text
 
 
 @pytest.mark.parametrize(("debug", "level"), [(True, logging.DEBUG), (False, logging.ERROR)])

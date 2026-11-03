@@ -13,12 +13,14 @@ from emporio_agent.agent.tools.serialization import (
 )
 from emporio_agent.application.catalog.service import CatalogService
 from emporio_agent.application.orders.service import OrderService
+from emporio_agent.application.policies.service import PolicyService
 from emporio_agent.domain.exceptions import InvalidReceivedOnError
 from emporio_agent.domain.models import OrderItem, OrderStatus
 from fakes import (
     FixedClock,
     InMemoryCatalogRepository,
     InMemoryOrderRepository,
+    InMemoryPolicyRepository,
     RecordingErrorReporter,
     make_customer,
     make_order,
@@ -71,6 +73,7 @@ def context(reporter) -> ToolContext:
     return ToolContext(
         catalog=CatalogService(catalog),
         orders=OrderService(orders, catalog, FixedClock(TODAY)),
+        policies=PolicyService(InMemoryPolicyRepository()),
         report_error=reporter,
     )
 

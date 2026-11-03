@@ -19,6 +19,12 @@ from emporio_agent.application.orders.dtos import (
     OrderLookup,
     ReturnLookup,
 )
+from emporio_agent.application.policies.dtos import (
+    PolicyExcerpt,
+    PolicyIndexEntry,
+    PolicyLookup,
+    PolicySearchResult,
+)
 from emporio_agent.domain.models import OrderStatus
 from emporio_agent.domain.pricing import PriceQuote, format_brl
 
@@ -141,6 +147,46 @@ def serialize_promotions(promotions: Iterable[ActivePromotion]) -> dict[str, Any
         for promotion in promotions
     ]
     return {"total": len(serialized), "promotions": serialized}
+
+
+def serialize_policy_excerpt(excerpt: PolicyExcerpt) -> dict[str, Any]:
+    return {
+        "section_id": excerpt.section_id,
+        "title": excerpt.title,
+        "parent_title": excerpt.parent_title,
+        "text": excerpt.text,
+        "clarifications": list(excerpt.clarifications),
+    }
+
+
+def serialize_available_sections(entries: Iterable[PolicyIndexEntry]) -> list[dict[str, Any]]:
+    return [{"section_id": entry.section_id, "title": entry.title} for entry in entries]
+
+
+def serialize_policy_search(
+    result: PolicySearchResult,
+    available_sections: Iterable[PolicyIndexEntry],
+) -> dict[str, Any]:
+    serialized: dict[str, Any] = {
+        "query_matched": bool(result.sections),
+        "sections": [serialize_policy_excerpt(excerpt) for excerpt in result.sections],
+    }
+    if not result.sections:
+        serialized["available_sections"] = serialize_available_sections(available_sections)
+    return serialized
+
+
+def serialize_policy_lookup(
+    lookup: PolicyLookup,
+    available_sections: Iterable[PolicyIndexEntry],
+) -> dict[str, Any]:
+    serialized: dict[str, Any] = {
+        "sections": [serialize_policy_excerpt(excerpt) for excerpt in lookup.sections],
+        "unknown_section_ids": list(lookup.unknown_section_ids),
+    }
+    if not lookup.sections:
+        serialized["available_sections"] = serialize_available_sections(available_sections)
+    return serialized
 
 
 def serialize_invalid_arguments(error: ValidationError) -> dict[str, Any]:

@@ -15,11 +15,11 @@ from emporio_agent.application.catalog.query_parser import (
     category_ids_for,
     contains_all_tokens,
     parse_query,
-    tokenize,
     with_synonyms,
     without_stopwords,
 )
 from emporio_agent.application.ports import CatalogRepository
+from emporio_agent.application.text import tokenize
 from emporio_agent.domain.availability import Availability, availability_of
 from emporio_agent.domain.models import Product
 from emporio_agent.domain.pricing import PriceQuote, quote_price

@@ -8,6 +8,7 @@ from emporio_agent.agent.tools.schemas import ToolInput
 from emporio_agent.agent.tools.serialization import serialize_invalid_arguments, to_tool_json
 from emporio_agent.application.catalog.service import CatalogService
 from emporio_agent.application.orders.service import OrderService
+from emporio_agent.application.policies.service import PolicyService
 from emporio_agent.application.ports import ErrorReporter
 
 type ToolArguments = Mapping[str, object] | None
@@ -17,6 +18,7 @@ type ToolArguments = Mapping[str, object] | None
 class ToolContext:
     catalog: CatalogService
     orders: OrderService
+    policies: PolicyService
     report_error: ErrorReporter
 
 

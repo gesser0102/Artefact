@@ -3,6 +3,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from emporio_agent.domain.models import Category, Customer, Order, OrderItem, Product, Promotion
+from emporio_agent.domain.policies import PolicySection
 
 
 class CatalogRepository(Protocol):
@@ -25,6 +26,10 @@ class OrderRepository(Protocol):
     def get_customer(self, customer_id: int) -> Customer | None: ...
 
     def list_order_items(self, order_id: int) -> Sequence[OrderItem]: ...
+
+
+class PolicyRepository(Protocol):
+    def list_sections(self) -> Sequence[PolicySection]: ...
 
 
 class Clock(Protocol):

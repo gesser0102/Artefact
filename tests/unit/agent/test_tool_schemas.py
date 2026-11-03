@@ -5,15 +5,23 @@ import pytest
 from pydantic import ValidationError
 
 from emporio_agent.agent.tools.schemas import (
+    MAX_POLICY_QUERY_LENGTH,
+    MAX_POLICY_SECTION_IDS,
     MAX_SEARCH_LIMIT,
     AssessReturnEligibilityInput,
+    GetPolicySectionsInput,
     GetProductInput,
     ListActivePromotionsInput,
     ListCategoriesInput,
     OrderIdentityInput,
+    SearchPoliciesInput,
     SearchProductsInput,
 )
 from emporio_agent.application.catalog.service import DEFAULT_SEARCH_LIMIT
+from emporio_agent.application.policies.service import (
+    DEFAULT_POLICY_SEARCH_LIMIT,
+    MAX_POLICY_SEARCH_LIMIT,
+)
 from emporio_agent.domain.returns import PurchaseChannel, ReturnReason
 
 
@@ -101,7 +109,14 @@ def test_null_arguments_fall_back_to_defaults():
 
 @pytest.mark.parametrize(
     "model",
-    [SearchProductsInput, GetProductInput, ListCategoriesInput, ListActivePromotionsInput],
+    [
+        SearchProductsInput,
+        GetProductInput,
+        ListCategoriesInput,
+        ListActivePromotionsInput,
+        SearchPoliciesInput,
+        GetPolicySectionsInput,
+    ],
 )
 def test_every_input_rejects_unknown_arguments(model):
     with pytest.raises(ValidationError):
@@ -159,3 +174,73 @@ def test_received_on_only_accepts_iso_text_and_never_echoes_it(raw):
 
     assert "91234" not in str(raised.value)
     assert "91234" not in str(raised.value.errors(include_input=False, include_context=False))
+
+
+def test_policy_search_defaults_and_strips_the_query():
+    parsed = SearchPoliciesInput.model_validate({"query": "  frete grátis  "})
+
+    assert parsed.query == "frete grátis"
+    assert parsed.limit == DEFAULT_POLICY_SEARCH_LIMIT
+
+
+def test_policy_search_null_limit_falls_back_to_default():
+    parsed = SearchPoliciesInput.model_validate({"query": "x", "limit": None})
+
+    assert parsed.limit == DEFAULT_POLICY_SEARCH_LIMIT
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(1, 1), ("5", 5), (" 2 ", 2)])
+def test_policy_search_limit_accepts_whole_numbers_in_range(raw, expected):
+    assert SearchPoliciesInput.model_validate({"query": "x", "limit": raw}).limit == expected
+
+
+@pytest.mark.parametrize("raw", [0, -1, MAX_POLICY_SEARCH_LIMIT + 1, "6", True, 2.5, "x"])
+def test_policy_search_limit_rejects_values_out_of_range(raw):
+    with pytest.raises(ValidationError):
+        SearchPoliciesInput.model_validate({"query": "x", "limit": raw})
+
+
+def test_policy_query_accepts_the_maximum_length_after_strip():
+    query = "a" * MAX_POLICY_QUERY_LENGTH
+
+    assert SearchPoliciesInput.model_validate({"query": f"  {query}  "}).query == query
+
+
+@pytest.mark.parametrize(
+    "raw", ["", "   ", "a" * (MAX_POLICY_QUERY_LENGTH + 1), 7, True, ["frete"], None]
+)
+def test_policy_query_rejects_blank_long_or_non_text(raw):
+    with pytest.raises(ValidationError):
+        SearchPoliciesInput.model_validate({"query": raw})
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (["4.2"], ["4.2"]),
+        ([4], ["4"]),
+        (["seção 4", 10, " 3.1 "], ["seção 4", "10", " 3.1 "]),
+    ],
+)
+def test_section_ids_accept_text_and_coerce_integers(raw, expected):
+    assert GetPolicySectionsInput.model_validate({"section_ids": raw}).section_ids == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        [],
+        ["1"] * (MAX_POLICY_SECTION_IDS + 1),
+        [True],
+        [False, "1"],
+        [4.2],
+        [None],
+        [["4"]],
+        "4.2",
+        4,
+        None,
+    ],
+)
+def test_section_ids_reject_booleans_floats_and_bad_sizes(raw):
+    with pytest.raises(ValidationError):
+        GetPolicySectionsInput.model_validate({"section_ids": raw})
