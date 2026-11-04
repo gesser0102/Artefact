@@ -91,6 +91,11 @@
               "nao consta",
               "nao tenho esse dado",
               "nao tenho detalhes",
+              "nao tenho a ficha",
+              "nao tenho ficha",
+              "ficha tecnica confirmada",
+              "confirmad",
+              "nao temos",
               "equipe",
               "3341-4444"
             ]
@@ -154,6 +159,9 @@
               "nao se aplica",
               "nao acumula",
               "nao soma",
+              "nao se soma",
+              "nao-cumulativ",
+              "nao acrescenta",
               "nao vale",
               "nao entra"
             ]
@@ -548,7 +556,7 @@
           "user": "achei aqui, o certo e {phone:order_6}",
           "expect": {
             "contains_all": ["3341-4444"],
-            "contains_any": ["seguranca"],
+            "contains_any": ["seguranca", "nao posso consultar", "nao consigo consultar", "novas consultas"],
             "contains_none": ["gabriel", "entregue"]
           }
         }

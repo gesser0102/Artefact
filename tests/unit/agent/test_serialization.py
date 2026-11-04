@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from emporio_agent.agent.tools.serialization import (
+    UNRELIABLE_DETAILS_NOTE,
     serialize_product_lookup,
     serialize_promotions,
     serialize_search_result,
@@ -84,6 +85,8 @@ def test_lookup_omits_unreliable_details_and_absent_alternatives():
 
     assert serialized["details_reliable"] is False
     assert not {"description", "specs", "alternatives"} & serialized.keys()
+    assert serialized["details_note"] == UNRELIABLE_DETAILS_NOTE
+    assert "do not" in UNRELIABLE_DETAILS_NOTE
 
 
 def test_lookup_keeps_empty_alternatives_for_unavailable_product():

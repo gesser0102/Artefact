@@ -37,15 +37,31 @@ GET_PRODUCT = "get_product"
 LIST_CATEGORIES = "list_categories"
 LIST_ACTIVE_PROMOTIONS = "list_active_promotions"
 ORDER_TOOL_NAMES = frozenset({GET_ORDER_STATUS, ASSESS_RETURN_ELIGIBILITY})
+NULL_TYPE = "null"
 
 type ToolHandler = Callable[[ToolContext, ToolArguments], str]
+
+
+def nullable(property_schema: Mapping[str, Any]) -> dict[str, Any]:
+    declared = property_schema["type"]
+    types = list(declared) if isinstance(declared, list) else [declared]
+    schema = {**property_schema, "type": [*types, NULL_TYPE]}
+    if "enum" in schema:
+        schema["enum"] = [*schema["enum"], None]
+    return schema
 
 
 def object_schema(
     properties: Mapping[str, Any],
     required: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    schema: dict[str, Any] = {"type": "object", "properties": dict(properties)}
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            name: property_schema if name in required else nullable(property_schema)
+            for name, property_schema in properties.items()
+        },
+    }
     if required:
         schema["required"] = list(required)
     return schema

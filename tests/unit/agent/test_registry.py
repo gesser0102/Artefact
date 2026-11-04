@@ -73,13 +73,32 @@ def test_return_schema_enums_follow_the_domain():
     properties = SPECS_BY_NAME["assess_return_eligibility"].parameters["properties"]
 
     assert properties["reason"]["enum"] == ["regret", "defect", "preference"]
-    assert properties["channel"]["enum"] == ["online", "in_store"]
+    assert properties["channel"]["enum"] == ["online", "in_store", None]
 
 
 def test_installment_schema_bounds_follow_the_input_model():
     properties = SPECS_BY_NAME["quote_installments"].parameters["properties"]
 
     assert properties["amount"]["type"] == "number"
-    assert properties["installments"]["type"] == "integer"
+    assert properties["installments"]["type"] == ["integer", "null"]
     assert properties["installments"]["maximum"] == 48
     assert "instead of calculating" in SPECS_BY_NAME["quote_installments"].description
+
+
+@pytest.mark.parametrize("name", list(INPUT_MODELS))
+def test_optional_properties_accept_null_and_required_ones_do_not(name):
+    parameters = SPECS_BY_NAME[name].parameters
+    required = set(parameters.get("required", []))
+
+    for field, property_schema in parameters["properties"].items():
+        declared = property_schema["type"]
+        types = declared if isinstance(declared, list) else [declared]
+        assert ("null" in types) == (field not in required), field
+        if "enum" in property_schema:
+            assert (None in property_schema["enum"]) == (field not in required), field
+
+
+def test_search_products_category_keeps_both_types_plus_null():
+    properties = SPECS_BY_NAME["search_products"].parameters["properties"]
+
+    assert properties["category"]["type"] == ["integer", "string", "null"]

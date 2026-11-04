@@ -53,6 +53,10 @@ PAYMENT_METHOD_LABELS = {
 CREDIT_PAYMENT_PATTERN = re.compile(r"credit_([0-9]+)x")
 CREDIT_PAYMENT_LABEL = "Cartão de crédito em {installments}x"
 UNKNOWN_PAYMENT_METHOD_LABEL = "Forma de pagamento não identificada"
+UNRELIABLE_DETAILS_NOTE = (
+    "No confirmed description or specs for this product; tell the customer the information is "
+    "not confirmed and do not state specs from memory."
+)
 
 
 def to_tool_json(payload: Mapping[str, Any]) -> str:
@@ -141,6 +145,8 @@ def serialize_product_lookup(lookup: ProductLookup) -> dict[str, Any]:
     if lookup.details_reliable:
         details["description"] = lookup.description
         details["specs"] = lookup.specs
+    else:
+        details["details_note"] = UNRELIABLE_DETAILS_NOTE
     if lookup.alternatives is not None:
         details["alternatives"] = [serialize_summary(item) for item in lookup.alternatives]
     return details

@@ -1,0 +1,118 @@
+{
+  "summary": {
+    "generated_at": "2026-11-04T15:02:18.687126-04:00",
+    "status": "complete",
+    "aborted_reason": null,
+    "primary_model": "openai/gpt-oss-120b",
+    "models": [
+      "openai/gpt-oss-120b"
+    ],
+    "cases": 2,
+    "cases_passed": 1,
+    "turns": 2,
+    "turns_passed": 1,
+    "categories": [
+      {
+        "category": "catalog",
+        "cases": 1,
+        "passed": 0
+      },
+      {
+        "category": "policy",
+        "cases": 1,
+        "passed": 1
+      }
+    ],
+    "tool_turns": 2,
+    "tool_turns_passed": 2,
+    "prompt_tokens": 10142,
+    "completion_tokens": 268,
+    "mean_tokens_per_turn": 5205.0,
+    "p50_ms": 1075,
+    "p95_ms": 1483,
+    "retries": 0,
+    "fallback_turns": 0,
+    "model_error_turns": 0
+  },
+  "cases": [
+    {
+      "id": "catalog_unreliable_spec",
+      "category": "catalog",
+      "description": "Music Man Bass 1X has unreliable details: do not invent pickups or weight.",
+      "passed": false,
+      "turns": [
+        {
+          "user": "o baixo music man bass 1x tem captacao ativa ou passiva? e quanto pesa?",
+          "reply": "Oi! Sobre o Music Man Bass 1X, não temos a especificação confirmada de captação (ativa ou passiva) nem o peso do instrumento. Se precisar de mais detalhes ou quiser ver opções disponíveis, é só me falar! 🎸",
+          "passed": false,
+          "reasons": [
+            "missing any of texts ['nao tenho essa informacao', 'nao tenho a informacao', 'nao tenho informacao', 'nao consigo confirmar', 'nao tenho como confirmar', 'nao consta', 'nao tenho esse dado', 'nao tenho detalhes', 'nao tenho a ficha', 'nao tenho ficha', 'ficha tecnica confirmada', 'equipe', '3341-4444']"
+          ],
+          "tools": [
+            {
+              "name": "search_products",
+              "arguments": {
+                "query": "baixo music man bass 1x"
+              },
+              "outcome": "ok"
+            },
+            {
+              "name": "get_product",
+              "arguments": {
+                "product_id": 135
+              },
+              "outcome": "ok"
+            }
+          ],
+          "has_tool_expectations": true,
+          "tools_passed": true,
+          "model_error": false,
+          "failure": null,
+          "prompt_tokens": 6126,
+          "completion_tokens": 161,
+          "models": [
+            "openai/gpt-oss-120b"
+          ],
+          "retries": 0,
+          "duration_ms": 1483
+        }
+      ]
+    },
+    {
+      "id": "policy_pix_on_promotion",
+      "category": "policy",
+      "description": "PIX 5% does not stack on a promotional price (6.2); Kalani KAL-700T is on promo.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "se eu fechar o kalani kal-700t no pix ganho mais 5% em cima?",
+          "reply": "Não, o desconto de 5 % no PIX não se soma a outras promoções. Cada oferta vale por si só. 🚫🎉",
+          "passed": true,
+          "reasons": [],
+          "tools": [
+            {
+              "name": "get_policy_sections",
+              "arguments": {
+                "section_ids": [
+                  "6.2"
+                ]
+              },
+              "outcome": "ok"
+            }
+          ],
+          "has_tool_expectations": true,
+          "tools_passed": true,
+          "model_error": false,
+          "failure": null,
+          "prompt_tokens": 4016,
+          "completion_tokens": 107,
+          "models": [
+            "openai/gpt-oss-120b"
+          ],
+          "retries": 0,
+          "duration_ms": 1075
+        }
+      ]
+    }
+  ]
+}

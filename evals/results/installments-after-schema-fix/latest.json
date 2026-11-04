@@ -1,0 +1,175 @@
+{
+  "summary": {
+    "generated_at": "2026-11-04T14:51:52.236386-04:00",
+    "status": "complete",
+    "aborted_reason": null,
+    "primary_model": "openai/gpt-oss-120b",
+    "models": [
+      "openai/gpt-oss-120b"
+    ],
+    "cases": 4,
+    "cases_passed": 3,
+    "turns": 4,
+    "turns_passed": 3,
+    "categories": [
+      {
+        "category": "installments",
+        "cases": 4,
+        "passed": 3
+      }
+    ],
+    "tool_turns": 4,
+    "tool_turns_passed": 4,
+    "prompt_tokens": 15699,
+    "completion_tokens": 463,
+    "mean_tokens_per_turn": 4040.5,
+    "p50_ms": 1007,
+    "p95_ms": 1299,
+    "retries": 0,
+    "fallback_turns": 0,
+    "model_error_turns": 0
+  },
+  "cases": [
+    {
+      "id": "installments_140",
+      "category": "installments",
+      "description": "R$ 140: 3x would be below R$ 50, so the max is 2x of R$ 70,00.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "da pra parcelar uma compra de 140 reais no cartao? em quantas vezes",
+          "reply": "Oi! Dá pra parcelar R$ 140,00 no cartão em até 2 vezes sem juros:\n\n- 1x de R$ 140,00  \n- 2x de R$ 70,00  \n\nQualquer outra dúvida, só chamar!",
+          "passed": true,
+          "reasons": [],
+          "tools": [
+            {
+              "name": "quote_installments",
+              "arguments": {
+                "amount": 140
+              },
+              "outcome": "ok"
+            }
+          ],
+          "has_tool_expectations": true,
+          "tools_passed": true,
+          "model_error": false,
+          "failure": null,
+          "prompt_tokens": 3836,
+          "completion_tokens": 115,
+          "models": [
+            "openai/gpt-oss-120b"
+          ],
+          "retries": 0,
+          "duration_ms": 976
+        }
+      ]
+    },
+    {
+      "id": "installments_450_asks_six",
+      "category": "installments",
+      "description": "R$ 450 in 6x is below R$ 80 per installment: max is 5x of R$ 90,00.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "se eu fizer uma compra de 450 reais, consigo dividir em 6x sem juros no cartao?",
+          "reply": "Oi! Para compras no cartão a gente oferece parcelamento sem juros em até **5 vezes**. No caso de R$ 450,00, o máximo sem juros seria 5x de R$ 90,00. Se quiser outra forma de pagamento ou mais detalhes, é só falar! 🎸",
+          "passed": true,
+          "reasons": [],
+          "tools": [
+            {
+              "name": "quote_installments",
+              "arguments": {
+                "amount": 450,
+                "installments": 6
+              },
+              "outcome": "ok"
+            }
+          ],
+          "has_tool_expectations": true,
+          "tools_passed": true,
+          "model_error": false,
+          "failure": null,
+          "prompt_tokens": 3897,
+          "completion_tokens": 154,
+          "models": [
+            "openai/gpt-oss-120b"
+          ],
+          "retries": 0,
+          "duration_ms": 1157
+        }
+      ]
+    },
+    {
+      "id": "installments_1000_max",
+      "category": "installments",
+      "description": "R$ 1.000: 7x-12x need R$ 100 each, so the max is 10x of R$ 100,00.",
+      "passed": false,
+      "turns": [
+        {
+          "user": "qual o maximo de parcelas pra uma compra de mil reais?",
+          "reply": "Oi! O máximo de parcelas sem juros para uma compra de R$ 1.000,00 é 10 vezes. 🎸✨",
+          "passed": false,
+          "reasons": [
+            "missing text '100,00'"
+          ],
+          "tools": [
+            {
+              "name": "quote_installments",
+              "arguments": {
+                "amount": 1000,
+                "installments": null
+              },
+              "outcome": "ok"
+            }
+          ],
+          "has_tool_expectations": true,
+          "tools_passed": true,
+          "model_error": false,
+          "failure": null,
+          "prompt_tokens": 3964,
+          "completion_tokens": 97,
+          "models": [
+            "openai/gpt-oss-120b"
+          ],
+          "retries": 0,
+          "duration_ms": 1299
+        }
+      ]
+    },
+    {
+      "id": "installments_2350_twelve",
+      "category": "installments",
+      "description": "R$ 2.350 reaches the 12x cap with R$ 195,83 each.",
+      "passed": true,
+      "turns": [
+        {
+          "user": "e se for 2350 no credito, vai ate 12x?",
+          "reply": "Sim! Em 12x no crédito fica R$ 195,83 por parcela, sem juros. 🚀",
+          "passed": true,
+          "reasons": [],
+          "tools": [
+            {
+              "name": "quote_installments",
+              "arguments": {
+                "amount": 2350,
+                "installments": 12
+              },
+              "outcome": "ok"
+            }
+          ],
+          "has_tool_expectations": true,
+          "tools_passed": true,
+          "model_error": false,
+          "failure": null,
+          "prompt_tokens": 4002,
+          "completion_tokens": 97,
+          "models": [
+            "openai/gpt-oss-120b"
+          ],
+          "retries": 0,
+          "duration_ms": 1007
+        }
+      ]
+    }
+  ]
+}
